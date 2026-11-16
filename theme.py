@@ -50,3 +50,7 @@ WIN_DETAIL_W = WIN_LIST_W + DETAIL_W
 MIN_WINDOW_W = 480  # 边缘拖拽调整大小时的宽度下限
 MIN_WINDOW_H = 320  # 边缘拖拽调整大小时的高度下限
 RESIZE_BAND = 8  # 窗口边缘热区宽度（像素），进入该范围光标变为调整形状
+# 四个角落被 CARD_RADIUS 的圆角透明区挖空，透明色像素不接收鼠标事件。
+# 角落热区必须延伸到圆角内侧的实体像素上才能点得到；取与圆角同宽，
+# 既能覆盖视觉上的角，又不会碰到顶栏最右侧距边约 22px 的按钮。
+CORNER_RESIZE_BAND = CARD_RADIUS

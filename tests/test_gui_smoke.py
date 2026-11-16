@@ -378,7 +378,7 @@ class TestMainWindowSmoke(GuiTestCase):
                 self.assertTrue(self.window.canvas.bind(seq))
         # 指针离开 8px 边缘落到内部控件后，Canvas 收不到 B1-Motion，
         # 必须靠全局捕获才能继续拖动、并可靠结束调整状态。
-        for seq in ("<B1-Motion>", "<ButtonRelease-1>"):
+        for seq in ("<B1-Motion>", "<ButtonPress-1>", "<ButtonRelease-1>"):
             with self.subTest(global_seq=seq):
                 self.assertTrue(self.root.bind_all(seq))
 
@@ -401,7 +401,82 @@ class TestMainWindowSmoke(GuiTestCase):
         self.assertEqual(window._edge_at(2, height - 2), "sw")
         self.assertEqual(window._edge_at(width - 2, height - 2), "se")
         self.assertEqual(window._edge_at(width // 2, height // 2), "")
+        # 圆角透明区（8px 内）外侧但仍属于角落的实体像素必须也能命中，
+        # 否则四个角落点不到、拖不动。
+        corner = theme.CORNER_RESIZE_BAND
+        self.assertGreater(corner, theme.RESIZE_BAND)
+        self.assertEqual(window._edge_at(corner - 4, corner - 4), "nw")
+        self.assertEqual(window._edge_at(width - corner + 4, corner - 4), "ne")
+        self.assertEqual(window._edge_at(corner - 4, height - corner + 4), "sw")
+        self.assertEqual(window._edge_at(width - corner + 4,
+                                         height - corner + 4), "se")
         window.root.withdraw()
+
+    def test_corner_press_through_child_starts_resize(self):
+        """角落被内部控件覆盖时，全局按下仍按 Canvas 坐标启动缩放。"""
+        window = self.window
+        window.root.geometry("900x560+50+50")
+        window.root.deiconify()
+        window.root.update()
+        # 模拟指针落在右上角圆角内侧（被详情/按钮等子控件挡住）
+        px = window.canvas.winfo_rootx() + window.canvas.winfo_width() - 12
+        py = window.canvas.winfo_rooty() + 12
+        event = SimpleNamespace(x_root=px, y_root=py)
+        with mock.patch.object(window.root, "winfo_pointerx", return_value=px), \
+                mock.patch.object(window.root, "winfo_pointery", return_value=py), \
+                mock.patch.object(window.root, "winfo_containing",
+                                  return_value=window.container):
+            window._on_any_press(event)
+        self.assertTrue(window._resizing)
+        self.assertEqual(window._resize_edge, "ne")
+        window._on_canvas_release(event)
+
+    def test_resize_scales_list_and_detail_proportionally(self):
+        """详情展开时拖右边界，列表与详情按占比一起缩放。"""
+        window = self.window
+        memo = self.store.create_memo(title="等比缩放")
+        self.store.add(memo)
+        window.root.deiconify()
+        window.show_detail(memo)
+        window.root.update()
+
+        window._resizing = True
+        window._resize_edge = "e"
+        start_w = 1360
+        window._resize_start = (500, 500, start_w, 560)
+        window._resize_anchor = (50, 50)
+        window._resize_list_w0 = theme.LIST_W
+        # 窗口从 1360 缩到 1000（约 0.735），两栏都应同比例缩小
+        event = SimpleNamespace(x_root=500 - 360, y_root=500)
+        with mock.patch.object(ui_main, "current_monitor_workarea",
+                               return_value=(0, 0, 1920, 1032)):
+            with mock.patch.object(window.root, "geometry"):
+                window._on_canvas_resize_motion(event)
+        expected = max(theme.MIN_LIST_W,
+                       min(int(round(theme.LIST_W * 1000 / float(start_w))),
+                           1000 - 2 * theme.PAD - theme.SPLIT_W - theme.MIN_DETAIL_W))
+        self.assertEqual(window._list_w, expected)
+        self.assertLess(window._list_w, theme.LIST_W)  # 列表确实跟着缩小了
+        self.assertGreaterEqual(window._list_w, theme.MIN_LIST_W)
+        window._on_canvas_release(event)
+
+    def test_resize_corner_scales_both_width_and_height(self):
+        """四角拖动同时改变宽和高（se 角）。"""
+        window = self.window
+        window._resizing = True
+        window._resize_edge = "se"
+        window._resize_start = (500, 500, 800, 600)
+        window._resize_anchor = (10, 10)
+        event = SimpleNamespace(x_root=570, y_root=540)
+        with mock.patch.object(ui_main, "current_monitor_workarea",
+                               return_value=(0, 0, 1920, 1032)):
+            with mock.patch.object(window.root, "geometry") as geom:
+                window._on_canvas_resize_motion(event)
+        called = geom.call_args[0][0]
+        width = int(called.split("x")[0])
+        height = int(called.split("x")[1].split("+")[0])
+        self.assertEqual(width, 870)
+        self.assertEqual(height, 640)
 
     def test_resize_motion_clamps_to_minimum(self):
         window = self.window

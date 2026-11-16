@@ -158,6 +158,7 @@ class MainWindow(object):
         self._resize_edge = ""  # n / s / e / w / ne / nw / se / sw
         self._resize_start = (0, 0, 0, 0)  # x_root, y_root, width, height
         self._resize_anchor = (0, 0)  # 窗口左上角屏幕坐标（nw/w/n 方向拖动时用）
+        self._resize_list_w0 = theme.LIST_W  # 横向缩放开始时列表列的宽度（用于按比例缩放两栏）
 
         self._setup_style()
         self._build_window()
@@ -220,6 +221,9 @@ class MainWindow(object):
         # 全局补监听拖动与松开（非调整状态下这两个回调立即返回，无副作用）；
         # 尺寸是按起始几何绝对计算的，重复触发也幂等。
         self.root.bind_all("<B1-Motion>", self._on_canvas_resize_motion, add="+")
+        # 角落的 8px 热区落在圆角透明区里、且上方常压着内部控件，Canvas 收不到
+        # 按下事件。全局在 ButtonPress 时按指针的 Canvas 坐标补一次边缘判断。
+        self.root.bind_all("<ButtonPress-1>", self._on_any_press, add="+")
         self.root.bind_all("<ButtonRelease-1>", self._on_canvas_release, add="+")
         # 关键：全局监听 Motion。Tk 的空光标会继承父级，内部控件的光标
         # 全部继承自 Canvas；若只在 Canvas 上监听，指针进入内部后 Canvas
@@ -507,11 +511,7 @@ class MainWindow(object):
         max_list = max(theme.LIST_W, total - theme.MIN_DETAIL_W)
         width = max(theme.MIN_LIST_W,
                     min(self._split_w0 + delta, max_list))
-        if width == self._list_w:
-            return
-        self._list_w = width
-        self.body.columnconfigure(0, minsize=width)
-        self.draw_rows()
+        self._apply_list_width(width)
 
     # ------------------------------------------------------------------
     # 窗口边缘自由调整大小（8 方向）
@@ -523,10 +523,21 @@ class MainWindow(object):
         if width < 40 or height < 40:
             return ""
         band = theme.RESIZE_BAND  # 边缘热区宽度（像素）
-        left = x <= band
-        right = x >= width - band
-        top = y <= band
-        bottom = y >= height - band
+        corner = theme.CORNER_RESIZE_BAND  # 角落额外热区（圆角半径）
+        # 四条边仍用窄热区；四个角额外向内侧延伸到实体像素上，
+        # 避开被 -transparentcolor 挖空、鼠标会穿透的圆角区域。
+        x_in_left_corner = x <= corner
+        x_in_right_corner = x >= width - corner
+        y_in_top_corner = y <= corner
+        y_in_bottom_corner = y >= height - corner
+        left = x <= band or (x_in_left_corner and
+                             (y_in_top_corner or y_in_bottom_corner))
+        right = x >= width - band or (x_in_right_corner and
+                                      (y_in_top_corner or y_in_bottom_corner))
+        top = y <= band or (y_in_top_corner and
+                            (x_in_left_corner or x_in_right_corner))
+        bottom = y >= height - band or (y_in_bottom_corner and
+                                        (x_in_left_corner or x_in_right_corner))
         parts = ""
         if top:
             parts += "n"
@@ -589,21 +600,44 @@ class MainWindow(object):
         except (tk.TclError, KeyError):
             pass
 
+    def _on_any_press(self, event: Any) -> None:
+        """全局按下补抓角落热区。
+
+        Canvas 上方的内部控件会吃掉ButtonPress，而角落的透明圆角又让
+        指针落在更外侧时事件直接穿透窗口。这里在窗口内任意位置按下时，
+        用指针相对 Canvas 的坐标再判断一次，命中边缘才进入缩放状态；
+        不在热区则立即返回，不影响按钮、输入框等正常交互。
+        """
+        if self._resizing:
+            return
+        pointer = self._pointer_over_canvas()
+        if pointer is None:
+            return
+        edge = self._edge_at(int(pointer[0]), int(pointer[1]))
+        if not edge:
+            return
+        self._begin_resize(event.x_root, event.y_root, edge)
+
+    def _begin_resize(self, root_x: Any, root_y: Any, edge: str) -> None:
+        """进入调整大小状态并记录起始几何。"""
+        self._resizing = True
+        self._resize_edge = edge
+        try:
+            self._resize_start = (
+                int(root_x), int(root_y),
+                self.root.winfo_width(), self.root.winfo_height(),
+            )
+            self._resize_anchor = (self.root.winfo_x(), self.root.winfo_y())
+            self._resize_list_w0 = self._list_w
+        except tk.TclError:
+            self._resizing = False
+
     def _on_canvas_press(self, event: Any) -> None:
         """在边缘热区按下 → 进入调整大小状态并记录起始几何。"""
         edge = self._edge_at(int(event.x), int(event.y))
         if not edge:
             return
-        self._resizing = True
-        self._resize_edge = edge
-        try:
-            self._resize_start = (
-                int(event.x_root), int(event.y_root),
-                self.root.winfo_width(), self.root.winfo_height(),
-            )
-            self._resize_anchor = (self.root.winfo_x(), self.root.winfo_y())
-        except tk.TclError:
-            self._resizing = False
+        self._begin_resize(event.x_root, event.y_root, edge)
 
     def _on_canvas_resize_motion(self, event: Any) -> None:
         """拖动边缘：按方向计算新宽高与位置，并做最小/屏幕尺寸钳制。"""
@@ -636,10 +670,27 @@ class MainWindow(object):
             y = y + (h0 - height)
         x = max(mx - width + 60, min(x, mx + sw - 60))
         y = max(my, min(y, my + sh - 40))
+        # 详情展开时横向缩放：列表与详情按当前占比一起缩放，
+        # 而不是列表固定、只压缩详情。按比例算出的列表宽再受最小宽度钳制。
+        if self._detail_open and ("e" in edge or "w" in edge) and width != w0:
+            avail = max(0, width - 2 * theme.PAD - theme.SPLIT_W)
+            max_list = max(theme.MIN_LIST_W,
+                           avail - theme.MIN_DETAIL_W)
+            scaled = int(round(self._resize_list_w0 * width / float(w0)))
+            new_list = max(theme.MIN_LIST_W, min(scaled, max_list))
+            self._apply_list_width(new_list)
         try:
             self.root.geometry("%dx%d+%d+%d" % (width, height, x, y))
         except tk.TclError:
             self._resizing = False
+
+    def _apply_list_width(self, width: int) -> None:
+        """设置列表列宽并重绘行；无变化时不触发多余布局。"""
+        if width == self._list_w:
+            return
+        self._list_w = width
+        self.body.columnconfigure(0, minsize=width)
+        self.draw_rows()
 
     def _on_canvas_release(self, event: Any) -> None:
         """松开边缘：结束调整大小状态并恢复光标。"""
