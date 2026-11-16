@@ -8,6 +8,7 @@
     month_cells(year, month)    生成 6x7 日期网格（周一为一周起点），便于单测
     normalize_time_text(text)  把 HH:MM / HH:MM:SS 规整成 HH:MM:SS，非法返回 ""
     build_due_text(day, text)  组合出 models.is_valid_time_text 认可的文本
+                                时间留空时默认 23:59:59（当天结束前）
     parse_due_text(text)       从已有 due 文本拆出 (日期, 时间文本)
     CalendarPopup               点击弹出的月历 Toplevel
 """
@@ -23,6 +24,8 @@ from models import parse_time
 WEEK_LABELS = ("一", "二", "三", "四", "五", "六", "日")
 _ROWS = 6
 _COLS = 7
+# 只选日期、不填具体时间时，视为该日结束前到期，而不是当天 00:00:00。
+DEFAULT_DUE_TIME = "23:59:59"
 
 
 # ---------------------------------------------------------------------------
@@ -60,13 +63,14 @@ def normalize_time_text(text: str) -> str:
 
 
 def build_due_text(day: date, time_text: str = "") -> str:
-    """把选中的日期与可选时间组合成合法 due 文本。
+    """把选中的日期与时间组合成合法 due 文本。
 
-    时间留空或非法时只写 ``YYYY-MM-DD``（同样被 models 接受，视为当天 00:00:00）。
+    时间留空或非法时取 ``DEFAULT_DUE_TIME``（23:59:59），
+    表示「当天结束前完成」，而不是被 models 当成当天 00:00:00。
     """
     prefix = day.strftime("%Y-%m-%d")
-    clock = normalize_time_text(time_text)
-    return prefix + (" " + clock if clock else "")
+    clock = normalize_time_text(time_text) or DEFAULT_DUE_TIME
+    return prefix + " " + clock
 
 
 def parse_due_text(text: str) -> Tuple[date, str]:
@@ -95,12 +99,16 @@ def split_due_text(text: str) -> Tuple[str, str]:
 
 
 def join_due_text(date_text: str, time_text: str) -> str:
-    """把日期字段与 HH:MM 时间字段合成可被 models 解析的完整文本。"""
+    """把日期字段与 HH:MM 时间字段合成可被 models 解析的完整文本。
+
+    时间字段留空时补 ``DEFAULT_DUE_TIME``（23:59:59），
+    只有日期字段也为空时才返回空串（表示未设置）。
+    """
     prefix = (date_text or "").strip()
     if not prefix:
         return ""
-    clock = normalize_time_text(time_text)
-    return prefix + (" " + clock if clock else "")
+    clock = normalize_time_text(time_text) or DEFAULT_DUE_TIME
+    return prefix + " " + clock
 
 
 def place_near_host(
@@ -228,7 +236,8 @@ class CalendarPopup(tk.Toplevel):
                  bg=theme.INPUT_BG, fg=theme.TEXT_DARK, relief="flat",
                  highlightthickness=1, highlightbackground=theme.INPUT_BORDER,
                  highlightcolor=theme.ACCENT, width=12).pack(side="left", padx=8)
-        tk.Label(clock_row, text="留空只记日期 · HH:MM", font=theme.FONT_TINY,
+        tk.Label(clock_row, text="留空默认 23:59:59 · HH:MM",
+                 font=theme.FONT_TINY,
                  bg=theme.CARD_BG, fg=theme.TEXT_MUTED).pack(side="left")
 
         foot = tk.Frame(self, bg=theme.CARD_BG)

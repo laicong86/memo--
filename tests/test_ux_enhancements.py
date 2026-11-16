@@ -33,7 +33,10 @@ class TestTimeFields(unittest.TestCase):
         self.assertEqual(join_due_text("2026-11-20", "15:30"),
                          "2026-11-20 15:30:00")
         self.assertEqual(join_due_text("", "15:30"), "")
-        self.assertEqual(join_due_text("2026-11-20", "bad"), "2026-11-20")
+        self.assertEqual(join_due_text("2026-11-20", "bad"),
+                         "2026-11-20 23:59:59")
+        self.assertEqual(join_due_text("2026-11-20", ""),
+                         "2026-11-20 23:59:59")
 
 
 class TestCalendarPlacement(unittest.TestCase):
@@ -183,6 +186,21 @@ class TestDetailTimeGui(_TkCase):
         self.assertTrue(detail._save_now())
         self.assertEqual(self.store.get(memo.id).due_at,
                          "2026-11-20 15:30:00")
+
+    def test_empty_time_field_defaults_to_end_of_day(self):
+        """时间框留空 / 非法时，只选日期也按当天 23:59:59 保存。"""
+        memo = self.store.create_memo(title="默认时间")
+        self.store.add(memo)
+        self.window.show_detail(memo)
+        self.root.update()
+        detail = self.window.detail
+        detail.var_due_date.set("2026-11-22")
+        detail.var_due_time.set("")
+        self.root.update()
+        self.assertEqual(detail.var_due.get(), "2026-11-22 23:59:59")
+        self.assertTrue(detail._save_now())
+        self.assertEqual(self.store.get(memo.id).due_at,
+                         "2026-11-22 23:59:59")
 
     def test_calendar_popup_is_near_button_and_inside_host(self):
         self.window.show()

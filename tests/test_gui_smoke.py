@@ -611,9 +611,9 @@ class TestDetailPanelSmoke(GuiTestCase):
         self.assertEqual(detail._calendar.var_month.get()[:4],
                          str(datetime.now().year))
         detail._calendar._pick(date(2026, 11, 20))
-        self.assertEqual(detail.var_due.get(), "2026-11-20")
+        self.assertEqual(detail.var_due.get(), "2026-11-20 23:59:59")
         self.assertIsNone(detail._calendar)
-        self.assertEqual(detail.collect().due_at, "2026-11-20")
+        self.assertEqual(detail.collect().due_at, "2026-11-20 23:59:59")
 
     def test_calendar_pick_with_time_and_clear(self):
         self._show()

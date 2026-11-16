@@ -14,8 +14,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from calendar_picker import (WEEK_LABELS, _COLS, _ROWS, build_due_text,
-                             month_cells, normalize_time_text, parse_due_text)
+from calendar_picker import (DEFAULT_DUE_TIME, WEEK_LABELS, _COLS, _ROWS,
+                             build_due_text, month_cells, normalize_time_text,
+                             parse_due_text)
 from models import is_valid_time_text, parse_time
 
 
@@ -85,11 +86,11 @@ class TestNormalizeTimeText(unittest.TestCase):
 
 
 class TestBuildDueText(unittest.TestCase):
-    def test_date_only_is_valid_and_parses_back(self):
+    def test_date_only_defaults_to_end_of_day(self):
         text = build_due_text(date(2026, 11, 20))
-        self.assertEqual(text, "2026-11-20")
+        self.assertEqual(text, "2026-11-20 23:59:59")
         self.assertTrue(is_valid_time_text(text))
-        self.assertEqual(parse_time(text).date(), date(2026, 11, 20))
+        self.assertEqual(parse_time(text), datetime(2026, 11, 20, 23, 59, 59))
 
     def test_date_with_time_is_valid_and_parses_back(self):
         text = build_due_text(date(2026, 11, 20), "14:30")
@@ -97,15 +98,16 @@ class TestBuildDueText(unittest.TestCase):
         self.assertTrue(is_valid_time_text(text))
         self.assertEqual(parse_time(text), datetime(2026, 11, 20, 14, 30, 0))
 
-    def test_invalid_time_falls_back_to_date_only(self):
+    def test_invalid_time_falls_back_to_end_of_day(self):
         for raw in ("非法", "25:99", "abc", None):
             with self.subTest(raw=raw):
                 text = build_due_text(date(2026, 1, 5), raw)
-                self.assertEqual(text, "2026-01-05")
+                self.assertEqual(text, "2026-01-05 23:59:59")
                 self.assertTrue(is_valid_time_text(text))
 
     def test_single_digit_month_day_is_zero_padded(self):
-        self.assertEqual(build_due_text(date(2026, 1, 5)), "2026-01-05")
+        self.assertEqual(build_due_text(date(2026, 1, 5)),
+                         "2026-01-05 " + DEFAULT_DUE_TIME)
 
 
 class TestParseDueText(unittest.TestCase):
@@ -129,12 +131,14 @@ class TestParseDueText(unittest.TestCase):
                 self.assertEqual(parse_due_text(raw), (today, ""))
 
     def test_round_trip_with_build_due_text(self):
-        for day, clock in ((date(2026, 11, 20), "08:00:00"),
-                           (date(2024, 2, 29), ""),
-                           (date(2027, 1, 1), "23:59:59")):
+        self.assertEqual(DEFAULT_DUE_TIME, "23:59:59")
+        for day, clock, expected in (
+                (date(2026, 11, 20), "08:00:00", "08:00:00"),
+                (date(2024, 2, 29), "", DEFAULT_DUE_TIME),
+                (date(2027, 1, 1), "23:59:59", "23:59:59")):
             with self.subTest(day=day, clock=clock):
                 self.assertEqual(parse_due_text(build_due_text(day, clock)),
-                                 (day, clock))
+                                 (day, expected))
 
 
 if __name__ == "__main__":
