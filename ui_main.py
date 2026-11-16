@@ -19,6 +19,8 @@
 from __future__ import annotations
 
 import math
+import os
+import sys
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import messagebox, ttk
@@ -148,6 +150,7 @@ class MainWindow(object):
     def _build_window(self) -> None:
         """创建无边框透明键色窗口 + 圆角卡片 Canvas。"""
         self.root.title("备忘录工具")
+        self._apply_app_icon()
         self.root.overrideredirect(True)
         try:
             self.root.attributes("-transparentcolor", theme.TRANSPARENT_KEY)
@@ -177,6 +180,31 @@ class MainWindow(object):
         # 卡片内容容器的空白区域同样可按住拖动窗口
         self.container.bind("<ButtonPress-1>", self._start_drag)
         self.container.bind("<B1-Motion>", self._on_drag)
+
+    def _apply_app_icon(self) -> None:
+        """给窗口/任务栏设置应用图标（tk.PhotoImage 仅支持 PNG/GIF）。
+
+        依次尝试源码目录 assets/icon.png、PyInstaller 打包时经 --add-data
+        解包到 _MEIPASS 的 assets/icon.png；都不可用时静默跳过（保持默认）。
+        """
+        candidates = []
+        try:
+            candidates.append(os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "assets", "icon.png"))
+        except Exception:
+            pass
+        bundle_dir = getattr(sys, "_MEIPASS", "")  # PyInstaller 解包目录
+        if bundle_dir:
+            candidates.append(os.path.join(bundle_dir, "assets", "icon.png"))
+        for path in candidates:
+            if path and os.path.isfile(path):
+                try:
+                    photo = tk.PhotoImage(file=path)
+                    self.root.iconphoto(True, photo)
+                    self._icon_photo = photo  # 防止被 GC 回收
+                    return
+                except tk.TclError:
+                    continue
 
     def _on_canvas_configure(self, event: Any) -> None:
         """窗口尺寸变化时重绘圆角卡片并同步内容容器尺寸。"""

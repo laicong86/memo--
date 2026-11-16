@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import queue
 import sys
 import threading
@@ -534,6 +535,39 @@ class TrayIcon(object):
                 pass
         self._registered_class = False
 
+    def _load_app_icon(self) -> int:
+        """加载应用图标 HICON：优先 exe 内嵌图标（打包时 --icon 注入），
+        其次源码目录的 assets/memotool.ico；都失败返回 0（回退系统默认图标）。
+        """
+        if _user32 is None:
+            return 0
+        IMAGE_ICON = 1
+        LR_LOADFROMFILE = 0x10
+        candidates = []
+        # PyInstaller --onefile：sys.executable 就是 exe 本身，图标已内嵌
+        exe_path = getattr(sys, "executable", "") or ""
+        if exe_path.lower().endswith(".exe"):
+            candidates.append(exe_path)
+        # 源码运行：直接读 ico 文件
+        try:
+            ico_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "assets", "memotool.ico")
+            candidates.append(ico_path)
+        except Exception:
+            pass
+        for path in candidates:
+            if not path or not os.path.isfile(path):
+                continue
+            try:
+                hicon = _user32.LoadImageW(
+                    None, ctypes.c_wchar_p(path), IMAGE_ICON, 0, 0,
+                    LR_LOADFROMFILE)
+                if hicon:
+                    return int(hicon)
+            except Exception:
+                continue
+        return 0
+
     def _run(self) -> None:
         """托盘线程主体：建窗 → 加图标 → 注册会话通知 → GetMessage 循环。"""
         if _user32 is None or _kernel32 is None or _shell32 is None or WNDPROC is None:
@@ -543,7 +577,8 @@ class TrayIcon(object):
         self._class_name = "PyMemoTrayWnd_" + uuid.uuid4().hex[:10]
         try:
             self._hinstance = _kernel32.GetModuleHandleW(None) or 0
-            self._hicon = _user32.LoadIconW(None, ctypes.c_void_p(IDI_APPLICATION)) or 0
+            self._hicon = self._load_app_icon() or _user32.LoadIconW(
+                None, ctypes.c_void_p(IDI_APPLICATION)) or 0
             self._wnd_proc = self._make_wnd_proc()
 
             wnd_class = WNDCLASSEXW()

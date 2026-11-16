@@ -1,7 +1,21 @@
 # 备忘录工具（Windows 桌面版）
 
+<div align="center">
+  <img src="assets/icon_master.png" width="96" alt="备忘录工具图标"/>
+</div>
+
 一个用 Python 3.9 标准库开发的 Windows 桌面备忘录程序，可打包为单文件 `exe`。
 **运行时零第三方依赖**：系统托盘、解锁监听、气泡提醒全部通过 `ctypes` 直调 Win32 API 实现。
+
+## 界面展示
+
+**主界面**（搜索、排序、快捷筛选、彩色紧急度标签、逾期红字提醒）：
+
+![主界面](docs/images/screenshot_main.png)
+
+**详情面板**（双击任务右侧展开：属性编辑、历史进展、保存/删除）：
+
+![详情面板](docs/images/screenshot_detail.png)
 
 ---
 
@@ -225,11 +239,14 @@ py -3.9 -m PyInstaller --onefile --noconsole --clean --name MemoTool main.py
 ├── single_instance.py   命名互斥体单实例守卫 + 唤起已开窗口
 ├── tray.py              ctypes Win32 托盘图标、气泡、右键菜单、消息循环
 ├── session_watcher.py   ctypes WTS 会话解锁监听
-├── build.py             PyInstaller 打包脚本
+├── build.py             PyInstaller 打包脚本（含图标注入）
 ├── build.bat            Windows 一键打包批处理
 ├── requirements.txt     依赖说明（运行时零依赖）
+├── assets/              应用图标（icon_master.png / memotool.ico / icon.png）
 ├── README.md            本文件
-└── docs/实现说明.md      实现阶段说明文档
+└── docs/
+    ├── 实现说明.md       实现阶段说明文档
+    └── images/          README 界面截图
 ```
 
 ---
@@ -240,6 +257,7 @@ py -3.9 -m PyInstaller --onefile --noconsole --clean --name MemoTool main.py
 - 非 Windows 平台：`models` / `storage` / `config` / `theme` 可独立 import 用于测试；
   `tray` / `session_watcher` 也能安全 import，但托盘与解锁监听不可用，程序降级为普通窗口模式。
 - 圆角窗口使用 `-transparentcolor` 键色实现，极个别系统主题下可能退化为直角（不影响功能）。
-- 托盘图标使用系统默认 `IDI_APPLICATION` 图标（零资源依赖），未内置自定义图标。
+- 应用图标：`assets/memotool.ico`（打包时经 PyInstaller `--icon` 内嵌 exe，窗口与托盘共用；
+  图标与 32px PNG 由 `assets/icon_master.png` 生成）。
 - 气泡提醒依赖 Windows 通知区域允许显示气泡；若系统开启了「专注助手 / 勿扰模式」，
   气泡可能被系统折叠，此时主窗口状态栏仍会显示提示。

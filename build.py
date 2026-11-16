@@ -16,6 +16,7 @@ import sys
 PYTHON39 = r"C:\Users\laicong\AppData\Local\Programs\Python\Python39\python.exe"
 ENTRY = "main.py"
 APP_NAME = "MemoTool"
+ICON = os.path.join("assets", "memotool.ico")
 
 
 def resolve_python() -> str:
@@ -38,8 +39,15 @@ def main() -> int:
         "--clean",
         "--noupx",
         "--name", APP_NAME,
-        ENTRY,
     ]
+    # 图标可选：存在才加 --icon，缺资源时仍可正常打包
+    if os.path.isfile(ICON):
+        command += ["--icon", ICON]
+    # tkinter 窗口图标（PNG，iconphoto 用）：打包进 exe 供运行时读取
+    png_icon = os.path.join("assets", "icon.png")
+    if os.path.isfile(png_icon):
+        command += ["--add-data", png_icon + os.pathsep + "assets"]
+    command.append(ENTRY)
     print("使用解释器：%s" % interpreter)
     print("执行命令：%s" % " ".join(command))
 
