@@ -207,8 +207,9 @@ class TestMainWindowSmoke(GuiTestCase):
         window.show_detail(memo)
         window.root.update()
 
-        # 用足够宽的主体模拟大屏，验证按位移调整两侧占比
-        with mock.patch.object(window.body, "winfo_width", return_value=1400):
+        # 用足够宽的主体模拟大屏（需容下 LIST_W+120 拖动后仍有详情最小宽），
+        # 验证按位移调整两侧占比
+        with mock.patch.object(window.body, "winfo_width", return_value=1800):
             window._start_split_drag(SimpleNamespace(x_root=500))
             window._on_split_drag(SimpleNamespace(x_root=620))
             self.assertEqual(window._list_w, theme.LIST_W + 120)
