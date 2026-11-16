@@ -225,6 +225,36 @@ class TestMainWindowSmoke(GuiTestCase):
         self.assertIn("导入", texts)
         self.assertNotIn("配色设置", texts)
 
+    # --- 仅显示已完成勾选框 ---
+    def test_done_only_checkbox_exists(self):
+        self.assertEqual(str(self.window.chk_done_only.cget("text")), "仅显示已完成")
+        self.assertFalse(self.window.var_done_only.get())
+
+    def test_done_only_filters_list(self):
+        window = self.window
+        store = window.store
+        for i, status in enumerate(["已完成", "未完成", "已完成", "未完成"], 1):
+            memo = store.create_memo(title="筛选任务%d" % i, status=status)
+            store.add(memo)
+        window.refresh()
+        self.assertEqual(len(window._rows), 4)
+        window.var_done_only.set(True)
+        window.refresh()
+        self.assertEqual(len(window._rows), 2)
+        self.assertTrue(all(m.is_done() for m in window._rows))
+        window.var_done_only.set(False)
+        window.refresh()
+        self.assertEqual(len(window._rows), 4)
+
+    def test_done_only_updates_status_bar(self):
+        window = self.window
+        window.var_done_only.set(True)
+        window.refresh()
+        self.assertIn("已完成", window.var_status.get())
+        window.var_done_only.set(False)
+        window.refresh()
+        self.assertNotIn("· 已完成", window.var_status.get())
+
     # --- 导入窗口 ---
     def test_open_import_creates_window_and_imports(self):
         window = self.window

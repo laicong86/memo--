@@ -245,6 +245,16 @@ class MainWindow(object):
         self.cmb_sort.pack(side="left", ipady=2)
         self.cmb_sort.bind("<<ComboboxSelected>>", self._on_sort_changed)
 
+        # 仅显示已完成：勾选后列表只列已完成任务
+        self.var_done_only = tk.BooleanVar(value=False)
+        self.chk_done_only = tk.Checkbutton(
+            header, text="仅显示已完成", variable=self.var_done_only,
+            command=self._on_done_only_changed, font=theme.FONT_LABEL,
+            bg=theme.CARD_BG, fg=theme.TEXT_MUTED, activebackground=theme.CARD_BG,
+            activeforeground=theme.TEXT_DARK, relief="flat",
+            cursor="hand2", highlightthickness=0)
+        self.chk_done_only.pack(side="left", padx=(10, 0))
+
         self._make_button(header, "＋ 新建", self.new_memo, side="left", padx=(14, 4))
         self._make_button(header, "导入", self.open_import, side="left", padx=4)
         self._make_button(header, "设置", self.open_settings, side="left", padx=4)
@@ -576,7 +586,10 @@ class MainWindow(object):
     # ------------------------------------------------------------------
     def refresh(self) -> None:
         """重新查询数据并刷新列表与状态栏。"""
-        self._rows = self.store.sorted_by(self._sort_mode, self._keyword)
+        rows = self.store.sorted_by(self._sort_mode, self._keyword)
+        if self.var_done_only.get():
+            rows = [memo for memo in rows if memo.is_done()]
+        self._rows = rows
         self._scroll = max(0, min(self._scroll, self._max_scroll()))
         self.draw_rows()
         self._update_status()
@@ -700,6 +713,11 @@ class MainWindow(object):
         self._scroll = 0
         self.refresh()
 
+    def _on_done_only_changed(self) -> None:
+        """「仅显示已完成」勾选切换：复位滚动并刷新列表。"""
+        self._scroll = 0
+        self.refresh()
+
     # ------------------------------------------------------------------
     # 详情面板联动
     # ------------------------------------------------------------------
@@ -807,10 +825,15 @@ class MainWindow(object):
         """刷新状态栏（每次刷新都取本机系统时间）。"""
         try:
             hint = (" · " + self._hint) if self._hint else ""
+            done_only = ""
+            if self.var_done_only.get():
+                done_only = " · 已完成 %d 条" % sum(
+                    1 for memo in self.store.list_all() if memo.is_done())
             self.var_status.set(
-                "共 %d 条 · 未完成 %d 条 · 系统时间 %s%s" % (
+                "共 %d 条 · 未完成 %d 条%s · 系统时间 %s%s" % (
                     self.store.count_all(),
                     self.store.count_pending(),
+                    done_only,
                     now_str(),
                     hint,
                 )
