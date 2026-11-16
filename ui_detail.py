@@ -435,6 +435,9 @@ class DetailPanel(tk.Frame):
                 on_clear=self._on_date_cleared,
                 anchor=self.btn_due,
                 host=self.winfo_toplevel(),
+                # 时间框可能已填好但日期为空（此时 var_due 仍是空串），
+                # 单独传进去，选完日期后才不会把已填时间冲掉。
+                initial_time=self.var_due_time.get(),
             )
         except tk.TclError:
             self._calendar = None

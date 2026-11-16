@@ -147,6 +147,7 @@ class CalendarPopup(tk.Toplevel):
         on_clear: Optional[Callable[[], None]] = None,
         anchor: Any = None,
         host: Any = None,
+        initial_time: str = "",
     ):
         super().__init__(master, bg=theme.CARD_BG)
         self.title("选择预期完成时间")
@@ -156,16 +157,26 @@ class CalendarPopup(tk.Toplevel):
         self._anchor = anchor
         self._host = host
         self._today = datetime.now().date()
-        self._year, self._month, self.var_time = self._initial_state(initial_text)
+        self._year, self._month, self.var_time = self._initial_state(
+            initial_text, initial_time)
         self.var_month = tk.StringVar(value="")
         self._day_buttons = []  # type: List[tk.Button]
         self._build()
         self._render()
         self._prepare_window(master)
 
-    def _initial_state(self, initial_text: str) -> Tuple[int, int, tk.StringVar]:
-        """根据当前 due 文本决定弹窗的初始年月与时间输入框内容。"""
+    def _initial_state(
+        self, initial_text: str, initial_time: str = ""
+    ) -> Tuple[int, int, tk.StringVar]:
+        """根据当前 due 文本 / 时间框内容决定弹窗初始年月与时间。
+
+        用户在详情的时间框先填好 ``15:30`` 但尚未选日期时，完整 due 仍为空；
+        此时以 ``initial_time`` 为准，避免选完日期后时间被清空。
+        """
         day, clock = parse_due_text(initial_text)
+        typed = normalize_time_text(initial_time)
+        if typed:
+            clock = typed
         return day.year, day.month, tk.StringVar(value=clock)
 
     # ------------------------------------------------------------------

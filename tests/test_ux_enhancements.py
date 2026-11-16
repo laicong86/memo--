@@ -6,7 +6,7 @@ import os
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 from unittest import mock
 
@@ -150,6 +150,37 @@ class TestDetailTimeGui(_TkCase):
         self.assertEqual(self.window.detail.var_due.get(),
                          "2026-11-20 15:30:00")
         self.assertTrue(self.window.detail._save_now())
+        self.assertEqual(self.store.get(memo.id).due_at,
+                         "2026-11-20 15:30:00")
+
+    def test_time_typed_before_picking_date_is_kept(self):
+        """先填时间、后选日期：选完日期后已填的 15:30 不能被日历清掉。"""
+        memo = self.store.create_memo(title="先填时间")
+        self.store.add(memo)
+        self.window.show_detail(memo)
+        self.root.update()
+        detail = self.window.detail
+        # 用户先清空默认日期、填好时间，再点日历选日期
+        detail.var_due_date.set("")
+        detail.var_due_time.set("15:30")
+        self.root.update()
+        # 日期为空时完整 due 仍为空，但时间框里已经有用户输入
+        self.assertEqual(detail.var_due.get(), "")
+        self.assertEqual(detail.var_due_time.get(), "15:30")
+
+        detail._open_calendar()
+        popup = detail._calendar
+        self.assertIsNotNone(popup)
+        try:
+            self.assertEqual(popup.var_time.get(), "15:30:00")
+            popup._pick(date(2026, 11, 20))
+        finally:
+            if detail._calendar is not None:
+                detail._calendar._close()
+        self.assertEqual(detail.var_due.get(), "2026-11-20 15:30:00")
+        self.assertEqual(detail.var_due_date.get(), "2026-11-20")
+        self.assertEqual(detail.var_due_time.get(), "15:30")
+        self.assertTrue(detail._save_now())
         self.assertEqual(self.store.get(memo.id).due_at,
                          "2026-11-20 15:30:00")
 
