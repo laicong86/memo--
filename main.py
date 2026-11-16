@@ -14,6 +14,7 @@
 每次解锁屏幕时弹出托盘气泡「还有 N 条未完成事务」。
 全局快捷键（默认 F2，可在「设置 → 快捷键」修改）：弹出 / 最小化主窗口。
 重复启动（如再次双击 exe）不会开第二个实例，而是把已运行的窗口唤起到前台。
+「设置 → 配色与规则 → 开机自动启动」勾选后，重启 / 注销后会自动运行（当前用户）。
 """
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ import tkinter as tk
 from datetime import datetime, timedelta
 from typing import Any, Callable, List, Tuple
 
+import autostart
 from config import AppConfig
 from models import STATUS_DONE, parse_time
 from single_instance import SingleInstanceGuard
@@ -145,6 +147,9 @@ class MemoApp(object):
         self.config = AppConfig.load(self.config_path)
         if not os.path.isfile(self.config_path):
             self.config.save(self.config_path)
+        # 打包版启动时自愈：exe 被移动/重打包后刷新 Run 项路径，保证重启后仍能起来
+        if getattr(sys, "frozen", False) and self.config.auto_start:
+            autostart.ensure_autostart()
         self.store = MemoStore(self.memos_path).load()
 
         self.root = tk.Tk()
@@ -159,6 +164,7 @@ class MemoApp(object):
         # 设置窗口保存快捷键后，立即应用到托盘热键（呼出 / 新建 两个）
         self.window._hotkey_applier = self.apply_hotkey
         self.window._new_hotkey_applier = self.apply_new_hotkey
+        self.window._autostart_applier = self.apply_autostart
         self._exiting = False
         self._hide_hint_shown = False  # 首次最小化托盘提示只弹一次
         self.tray = TrayIcon(
@@ -181,6 +187,16 @@ class MemoApp(object):
     def apply_new_hotkey(self, hotkey_text: str) -> bool:
         """应用配置的全局快捷键（快速新建事务）。"""
         return bool(self.tray.set_new_hotkey(hotkey_text))
+
+    def apply_autostart(self, enabled: bool) -> bool:
+        """应用开机自启开关；失败弹托盘气泡告知，不影响其他设置保存。"""
+        ok, message = autostart.set_autostart(bool(enabled))
+        if not ok:
+            try:
+                self.tray.notify("备忘录工具", message)
+            except Exception:
+                pass
+        return ok
 
     # ------------------------------------------------------------------
     # 线程调度

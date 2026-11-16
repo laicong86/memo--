@@ -80,6 +80,7 @@ DEFAULT_UNLOCK_DUE_HOURS = 24  # 解锁提醒：列出未来 24 小时内将到�
 DEFAULT_SORT_MODE = SORT_CREATED
 DEFAULT_HOTKEY = "F2"  # 全局快捷键：弹出 / 最小化主窗口
 DEFAULT_NEW_HOTKEY = "Ctrl+Alt+N"  # 全局快捷键：快速新建事务
+DEFAULT_AUTO_START = False  # 开机自启动：默认关闭，由用户在设置里主动开启
 CONFIG_VERSION = 1
 
 _MAX_HOURS = 24 * 365
@@ -124,11 +125,32 @@ def _safe_hours(value: Any, fallback: int = DEFAULT_DUE_SOON_HOURS) -> int:
     return _coerce_hours(value, safe_fallback)
 
 
+def _coerce_bool(value: Any, default: bool = DEFAULT_AUTO_START) -> bool:
+    """把配置里的任意值规整为布尔；无法识别时回退 default。
+
+    JSON 里手工把 auto_start 写成 "false" 字符串时，直接 bool() 会得到 True，
+    因此显式识别常见真假字符串，避免用户关掉自启又被重新打开。
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if value in (0, 1):
+            return bool(value)
+        return default
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in ("true", "1", "yes", "on"):
+            return True
+        if text in ("false", "0", "no", "off", ""):
+            return False
+    return default
+
+
 # ---------------------------------------------------------------------------
 # 配置对象
 # ---------------------------------------------------------------------------
 class AppConfig(object):
-    """用户配置：颜色映射、临期阈值、默认排序模式。"""
+    """用户配置：颜色映射、临期阈值、排序、快捷键、开机自启。"""
 
     def __init__(
         self,
@@ -138,6 +160,7 @@ class AppConfig(object):
         sort_mode: str = DEFAULT_SORT_MODE,
         hotkey: str = DEFAULT_HOTKEY,
         new_hotkey: str = DEFAULT_NEW_HOTKEY,
+        auto_start: bool = DEFAULT_AUTO_START,
         path: str = "",
     ):
         self.path = path or ""
@@ -145,6 +168,7 @@ class AppConfig(object):
         self.due_soon_hours = _safe_hours(due_soon_hours)
         self.unlock_due_hours = _safe_hours(unlock_due_hours,
                                             DEFAULT_UNLOCK_DUE_HOURS)
+        self.auto_start = _coerce_bool(auto_start)
         # 非字符串（含不可哈希类型）一律回退，避免 dict 成员判断抛 TypeError
         self.sort_mode = (
             sort_mode
@@ -216,6 +240,8 @@ class AppConfig(object):
             self.new_hotkey = normalize_text(new_hotkey_value)
         else:
             self.new_hotkey = DEFAULT_NEW_HOTKEY
+        if "auto_start" in data:
+            self.auto_start = _coerce_bool(data.get("auto_start"))
 
     def as_dict(self) -> Dict[str, Any]:
         """序列化为可写 JSON 的字典。"""
@@ -227,6 +253,7 @@ class AppConfig(object):
             "sort_mode": self.sort_mode,
             "hotkey": self.hotkey,
             "new_hotkey": self.new_hotkey,
+            "auto_start": self.auto_start,
         }
 
     def save(self, path: str = "") -> bool:

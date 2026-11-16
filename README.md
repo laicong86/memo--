@@ -61,6 +61,14 @@ C:\Users\laicong\AppData\Local\Programs\Python\Python39\python.exe main.py
   提示注册失败，请在设置里换一个按键；
 - 修改后点「保存设置」立即生效，无需重启。
 
+### 开机自动启动
+在「设置 → 配色与规则」里勾选 **开机自动启动** 并保存，重启电脑 / 注销重新登录后会自动运行：
+
+- 只写**当前用户**的 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，**不需要管理员权限**，不影响其他账户；
+- 打包版写入 exe 的完整路径（带引号），源码运行则写 `pythonw.exe + main.py`，不会弹控制台窗口；
+- exe 被移动 / 重新打包后，下次启动会自动刷新注册表中的路径，保证重启后仍能起来；
+- 取消勾选并保存即删除该项；也可在「任务管理器 → 启动应用」里看到 / 禁用它。
+
 ### 窗口拖动与调整大小
 - 按住**顶部任意空白区域**（标题两侧、分隔弧线、底部状态栏空白）即可拖动窗口；
 - 把鼠标移到**窗口边缘**（8px 热区）或**四个角落**（含圆角内侧）光标会变成
@@ -259,6 +267,7 @@ py -3.9 -m PyInstaller --onefile --noconsole --clean --name MemoTool main.py
 ├── models.py            数据模型、枚举常量、系统时间工具
 ├── storage.py           JSON 持久化、增删改查、搜索排序、未完成计数
 ├── config.py            颜色映射规则 + 可配置读写 + 配色计算
+├── autostart.py         HKCU Run 开机自启管理（读/写/自愈）
 ├── theme.py             浅色主题常量（避免 UI 模块循环 import）
 ├── ui_main.py           主窗口：圆角卡片、搜索/排序、自绘列表、设置入口
 ├── ui_detail.py         右侧详情面板：左编辑区 + 右属性区、历史进展直接融进备注区

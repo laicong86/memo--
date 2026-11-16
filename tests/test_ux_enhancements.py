@@ -19,7 +19,8 @@ import tkinter as tk
 
 from calendar_picker import (display_time_text, join_due_text,
                              place_near_host, split_due_text)
-from config import (AppConfig, COLOR_KEYS, DEFAULT_UNLOCK_DUE_HOURS)
+from config import (AppConfig, COLOR_KEYS, DEFAULT_AUTO_START,
+                    DEFAULT_UNLOCK_DUE_HOURS)
 from main import format_unlock_reminder, upcoming_due_memos
 from storage import MemoStore
 from ui_main import MainWindow
@@ -149,6 +150,31 @@ class _TkCase(unittest.TestCase):
     def _color_vars(self):
         return {key: tk.StringVar(value=self.config.get_color(key))
                 for key in COLOR_KEYS}
+
+
+class TestAutoStartGui(_TkCase):
+    def test_settings_persists_and_applies_autostart(self):
+        applied = []  # type: list
+        self.window._autostart_applier = applied.append
+        auto_var = tk.BooleanVar(value=True)
+        self.window._save_settings(
+            tk.Toplevel(self.root), self._color_vars(),
+            tk.IntVar(value=48), tk.StringVar(value=""),
+            tk.StringVar(value="F2"), tk.StringVar(value="Ctrl+Alt+N"),
+            tk.IntVar(value=24), auto_var)
+        self.assertIs(self.config.auto_start, True)
+        self.assertEqual(applied, [True])
+        reloaded = AppConfig.load(self.window.config_path)
+        self.assertIs(reloaded.auto_start, True)
+
+    def test_reset_restores_default_autostart(self):
+        var = tk.BooleanVar(value=True)
+        self.window._reset_settings(
+            self._color_vars(),
+            {key: tk.Label(self.root) for key in COLOR_KEYS},
+            tk.IntVar(value=48), tk.StringVar(value=""),
+            auto_start_var=var)
+        self.assertEqual(var.get(), DEFAULT_AUTO_START)
 
 
 class TestDetailTimeGui(_TkCase):

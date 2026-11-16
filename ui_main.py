@@ -39,6 +39,7 @@ from config import (
     DEFAULT_UNLOCK_DUE_HOURS,
     DEFAULT_HOTKEY,
     DEFAULT_NEW_HOTKEY,
+    DEFAULT_AUTO_START,
     color_for_memo,
     color_key_for_memo,
     is_valid_hex,
@@ -156,6 +157,7 @@ class MainWindow(object):
         self._drag_ox = 0
         self._drag_oy = 0
         self._hotkey_applier = None  # 由 MemoApp 注入：应用全局热键的回调
+        self._autostart_applier = None  # 由 MemoApp 注入：应用开机自启的回调
         self._resizing = False
         self._resize_edge = ""  # n / s / e / w / ne / nw / se / sw
         self._resize_start = (0, 0, 0, 0)  # x_root, y_root, width, height
@@ -1221,6 +1223,15 @@ class MainWindow(object):
                      values=[label for _, label in SORT_MODES]).grid(
             row=2, column=1, sticky="w", pady=4)
 
+        auto_start_var = tk.BooleanVar(value=bool(self.config.auto_start))
+        tk.Checkbutton(
+            options, text="开机自动启动（重启电脑后自动运行）",
+            variable=auto_start_var, font=theme.FONT_LABEL,
+            bg=theme.CARD_BG, fg=theme.TEXT_DARK,
+            activebackground=theme.CARD_BG, selectcolor=theme.INPUT_BG,
+            anchor="w", relief="flat", cursor="hand2",
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 2))
+
         # ---------------- 快捷键 ----------------
         hotkey_frame = tk.LabelFrame(window, text="快捷键",
                                      font=theme.FONT_LABEL, bg=theme.CARD_BG,
@@ -1326,14 +1337,15 @@ class MainWindow(object):
                   cursor="hand2", width=10,
                   command=lambda: self._save_settings(
                       window, color_vars, hours_var, sort_var,
-                      hotkey_var, new_hotkey_var, unlock_hours_var)).pack(side="left")
+                      hotkey_var, new_hotkey_var, unlock_hours_var,
+                      auto_start_var)).pack(side="left")
         tk.Button(buttons, text="恢复默认", font=theme.FONT_LABEL,
                   bg=theme.HEADER_BG, fg=theme.TEXT_DARK, relief="flat",
                   cursor="hand2", width=9,
                   command=lambda: self._reset_settings(
                       color_vars, previews, hours_var, sort_var,
-                      hotkey_var, new_hotkey_var, unlock_hours_var)).pack(
-            side="left", padx=8)
+                      hotkey_var, new_hotkey_var, unlock_hours_var,
+                      auto_start_var)).pack(side="left", padx=8)
         tk.Button(buttons, text="退出程序", font=theme.FONT_LABEL,
                   bg=theme.HEADER_BG, fg=theme.DANGER, relief="flat",
                   cursor="hand2", width=9,
@@ -1358,8 +1370,9 @@ class MainWindow(object):
                        hours_var: Any, sort_var: Any,
                        hotkey_var: Any = None,
                        new_hotkey_var: Any = None,
-                       unlock_hours_var: Any = None) -> None:
-        """校验并保存设置，立即刷新列表颜色与全局热键。"""
+                       unlock_hours_var: Any = None,
+                       auto_start_var: Any = None) -> None:
+        """校验并保存设置，立即刷新列表颜色、全局热键与开机自启。"""
         for key in COLOR_KEYS:
             raw = color_vars[key].get().strip()
             hex_value = raw.split()[0] if raw else ""
@@ -1380,6 +1393,8 @@ class MainWindow(object):
             except (tk.TclError, ValueError):
                 self.config.unlock_due_hours = DEFAULT_UNLOCK_DUE_HOURS
         self.config.sort_mode = LABEL_TO_SORT.get(sort_var.get(), SORT_CREATED)
+        if auto_start_var is not None:
+            self.config.auto_start = bool(auto_start_var.get())
         self._sort_mode = self.config.sort_mode
         try:
             self.cmb_sort.set(SORT_MODE_LABELS[self._sort_mode])
@@ -1416,6 +1431,18 @@ class MainWindow(object):
             messagebox.showerror("保存失败", "无法写入配置文件：%s" % exc,
                                  parent=window)
             return
+        # 应用开机自启（写当前用户的 HKCU Run 项，失败时配置仍保留）
+        if auto_start_var is not None and getattr(self, "_autostart_applier", None):
+            try:
+                applied = self._autostart_applier(self.config.auto_start)
+                if applied is False:
+                    messagebox.showwarning(
+                        "开机自启动",
+                        "配置已保存，但开机启动项写入失败。\n"
+                        "可稍后在设置里重新勾选，或检查注册表权限。",
+                        parent=window)
+            except Exception:
+                pass
         # 应用新热键（注册在托盘线程，线程安全）
         if hotkey_var is not None and getattr(self, "_hotkey_applier", None):
             try:
@@ -1434,7 +1461,8 @@ class MainWindow(object):
                         previews: Dict[str, tk.Label], hours_var: Any,
                         sort_var: Any, hotkey_var: Any = None,
                         new_hotkey_var: Any = None,
-                        unlock_hours_var: Any = None) -> None:
+                        unlock_hours_var: Any = None,
+                        auto_start_var: Any = None) -> None:
         """把设置窗口表单恢复为默认值（不立即写盘，需点击保存）。"""
         for key in COLOR_KEYS:
             color_vars[key].set(DEFAULT_COLOR_MAP[key])
@@ -1450,6 +1478,8 @@ class MainWindow(object):
             hotkey_var.set(DEFAULT_HOTKEY)
         if new_hotkey_var is not None:
             new_hotkey_var.set(DEFAULT_NEW_HOTKEY)
+        if auto_start_var is not None:
+            auto_start_var.set(DEFAULT_AUTO_START)
 
     def _exit_from_settings(self) -> None:
         """设置窗口中的退出入口（走完整清理流程）。"""
