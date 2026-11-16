@@ -100,6 +100,9 @@ class TestMainWindowSmoke(GuiTestCase):
         self.assertIn("共 0 条", text)
         self.assertIn("未完成 0 条", text)
         self.assertIn("系统时间", text)
+        self.assertIn("双击任务查看详情", text)
+        self.assertLess(text.index("系统时间"),
+                        text.index("双击任务查看详情"))
 
     def test_tick_schedules_next_status_refresh(self):
         with mock.patch.object(self.root, "after") as after:
@@ -217,9 +220,26 @@ class TestMainWindowSmoke(GuiTestCase):
         window._on_split_drag(SimpleNamespace(x_root=2000))
         self.assertGreaterEqual(window._list_w, theme.LIST_W)
 
+        adjusted = window._list_w
         window.close_detail()
         self.assertFalse(window.splitter.winfo_ismapped())
-        self.assertEqual(window._list_w, theme.LIST_W)
+        # 收起详情后保留用户调整过的列表宽度，不再重置为默认
+        self.assertEqual(window._list_w, adjusted)
+
+    def test_close_detail_keeps_adjusted_list_width(self):
+        """调整列表宽度后收起/重开详情，宽度都应保留。"""
+        window = self.window
+        memo = self.store.create_memo(title="宽度保留")
+        self.store.add(memo)
+        target = theme.LIST_W + 140
+        window._apply_list_width(target)
+        window.show_detail(memo)
+        self.assertEqual(window._list_w, target)
+        # 展开/收起时列宽配置都应保持调整后的值，不被重置为默认
+        self.assertEqual(window.body.columnconfigure(0)["minsize"], target)
+        window.close_detail()
+        self.assertEqual(window._list_w, target)
+        self.assertEqual(window.body.columnconfigure(0)["minsize"], target)
 
     def test_single_click_selects_row(self):
         memo = self.store.create_memo(title="click me")

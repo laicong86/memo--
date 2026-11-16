@@ -913,24 +913,27 @@ class MainWindow(object):
     # 详情面板联动
     # ------------------------------------------------------------------
     def show_detail(self, memo: Memo) -> None:
-        """展开右侧详情面板：只加宽窗口，列表区宽度保持不变。"""
+        """展开右侧详情面板：加宽窗口，列表区宽度保持当前值（含用户调整过的）。"""
         self._selected_id = memo.id
         self._detail_open = True
         self.detail.show(memo)
         self.body.columnconfigure(1, minsize=theme.SPLIT_W)
         self.splitter.grid()
-        self._set_window_width(theme.WIN_DETAIL_W)
+        # 窗口宽度按当前列表宽 + 详情区固定宽度计算，尊重用户此前调整过的列表占比
+        extra = self._list_w - theme.LIST_W
+        self._set_window_width(theme.WIN_DETAIL_W + extra)
         self.draw_rows()
 
     def close_detail(self) -> None:
-        """收起详情面板，恢复窗口宽度与列表默认宽度。"""
+        """收起详情面板：保留用户调整过的列表宽度，仅去掉详情区宽度。"""
         self._detail_open = False
         self.detail.hide()
         self.splitter.grid_remove()
         self.body.columnconfigure(1, minsize=0)
-        self._list_w = theme.LIST_W
-        self.body.columnconfigure(0, minsize=theme.LIST_W)
-        self._set_window_width(theme.WIN_LIST_W)
+        # 列表宽度保持用户调整后的值，不再重置为默认
+        self.body.columnconfigure(0, minsize=self._list_w)
+        extra = self._list_w - theme.LIST_W
+        self._set_window_width(theme.WIN_LIST_W + extra)
         self.draw_rows()
 
     def new_memo(self) -> None:
@@ -1030,7 +1033,7 @@ class MainWindow(object):
                 done_only = " · 已完成 %d 条" % sum(
                     1 for memo in self.store.list_all() if memo.is_done())
             self.var_status.set(
-                "共 %d 条 · 未完成 %d 条%s · 系统时间 %s%s" % (
+                "共 %d 条 · 未完成 %d 条%s · 系统时间 %s · 双击任务查看详情%s" % (
                     self.store.count_all(),
                     self.store.count_pending(),
                     done_only,
