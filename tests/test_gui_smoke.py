@@ -35,6 +35,7 @@ from models import (STATUS_DONE, STATUS_LEVELS, TIME_FORMAT, URGENCY_LEVELS,
                     Memo)
 from storage import MemoStore
 import theme
+import ui_main
 from ui_main import MainWindow
 
 
@@ -331,6 +332,11 @@ class TestMainWindowSmoke(GuiTestCase):
                     "<ButtonRelease-1>"):
             with self.subTest(seq=seq):
                 self.assertTrue(self.window.canvas.bind(seq))
+        # 指针离开 8px 边缘落到内部控件后，Canvas 收不到 B1-Motion，
+        # 必须靠全局捕获才能继续拖动、并可靠结束调整状态。
+        for seq in ("<B1-Motion>", "<ButtonRelease-1>"):
+            with self.subTest(global_seq=seq):
+                self.assertTrue(self.root.bind_all(seq))
 
     def test_edge_at_detects_eight_directions(self):
         window = self.window
@@ -370,6 +376,39 @@ class TestMainWindowSmoke(GuiTestCase):
         self.assertGreaterEqual(height, 320)
         window._on_canvas_release(event)
         self.assertFalse(window._resizing)
+
+    def test_resize_uses_current_monitor_on_secondary_screen(self):
+        """双屏：左侧大屏上的窗口不能被右侧主屏（小屏）钳制或拉回。"""
+        window = self.window
+        window._resizing = True
+        window._resize_edge = "e"
+        window._resize_start = (-800, 500, 900, 560)
+        window._resize_anchor = (-1500, 100)
+        event = SimpleNamespace(x_root=-600, y_root=500)  # 向右拖 200px
+        with mock.patch.object(ui_main, "current_monitor_workarea",
+                               return_value=(-1920, 0, 1920, 1032)):
+            with mock.patch.object(window.root, "geometry") as geom:
+                window._on_canvas_resize_motion(event)
+        called = geom.call_args[0][0]
+        width = int(called.split("x")[0])
+        x = int(called.split("+")[1])
+        # 旧逻辑按主屏 1280 钳制会把 x 拉成 -1040；新逻辑保持 -1500
+        self.assertEqual(width, 1100)
+        self.assertEqual(x, -1500)
+        window._on_canvas_release(event)
+        self.assertFalse(window._resizing)
+
+    def test_expand_detail_keeps_window_on_secondary_screen(self):
+        window = self.window
+        with mock.patch.object(window.root, "winfo_x", return_value=-1200), \
+                mock.patch.object(window.root, "winfo_y", return_value=100), \
+                mock.patch.object(ui_main, "current_monitor_workarea",
+                                  return_value=(-1920, 0, 1920, 1032)), \
+                mock.patch.object(window.root, "geometry") as geom:
+            window._set_window_width(1360)
+        called = geom.call_args[0][0]
+        x = int(called.split("+")[1])
+        self.assertTrue(-1920 <= x <= 0)
 
     def test_resize_only_starts_from_edge(self):
         window = self.window

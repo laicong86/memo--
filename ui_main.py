@@ -18,6 +18,7 @@
 """
 from __future__ import annotations
 
+import ctypes
 import math
 import os
 import sys
@@ -60,6 +61,45 @@ from ui_detail import DetailPanel
 
 LABEL_TO_SORT = {label: key for key, label in SORT_MODES}
 _PRESET_VALUES = ["%s %s" % (hex_value, name) for hex_value, name in COLOR_PRESETS]
+
+
+class _WinRect(ctypes.Structure):
+    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+
+class _WinMonitorInfo(ctypes.Structure):
+    _fields_ = [("cbSize", ctypes.c_ulong), ("rcMonitor", _WinRect),
+                ("rcWork", _WinRect), ("dwFlags", ctypes.c_ulong)]
+
+
+def current_monitor_workarea(root: Any) -> Any:
+    """返回窗口所在显示器的工作区 (x, y, width, height)。
+
+    Windows 多屏下 ``winfo_screenwidth()/height()`` 返回的是**主屏**尺寸：
+    小屏为主屏、窗口拖到大屏后若继续按主屏钳制，宽度会被压回、位置被
+    拉回主屏，表现为「光标正常但拖动异常」。这里用 Win32
+    MonitorFromWindow + GetMonitorInfo 取真实所在屏；任何失败都回退 Tk 的
+    主屏尺寸，非 Windows / 测试环境同样可用。
+    """
+    try:
+        user32 = ctypes.WinDLL("user32")
+        user32.MonitorFromWindow.restype = ctypes.c_void_p
+        user32.MonitorFromWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        monitor = user32.MonitorFromWindow(int(root.winfo_id()), 2)
+        info = _WinMonitorInfo()
+        info.cbSize = ctypes.sizeof(_WinMonitorInfo)
+        if user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            work = info.rcWork
+            width = int(work.right) - int(work.left)
+            height = int(work.bottom) - int(work.top)
+            if width > 100 and height > 100:
+                return (int(work.left), int(work.top), width, height)
+    except (AttributeError, OSError, ValueError, tk.TclError):
+        pass
+    return (0, 0, int(root.winfo_screenwidth()),
+            int(root.winfo_screenheight()))
 
 
 def round_rect_points(x1: float, y1: float, x2: float, y2: float,
@@ -175,6 +215,12 @@ class MainWindow(object):
         self.canvas.bind("<ButtonPress-1>", self._on_canvas_press)
         self.canvas.bind("<B1-Motion>", self._on_canvas_resize_motion)
         self.canvas.bind("<ButtonRelease-1>", self._on_canvas_release)
+        # 拖动边界时指针一旦离开 8px 热区、落到内部控件上，<B1-Motion>
+        # 就只发给那个控件，Canvas 收不到 → 窗口卡住不再跟随鼠标。
+        # 全局补监听拖动与松开（非调整状态下这两个回调立即返回，无副作用）；
+        # 尺寸是按起始几何绝对计算的，重复触发也幂等。
+        self.root.bind_all("<B1-Motion>", self._on_canvas_resize_motion, add="+")
+        self.root.bind_all("<ButtonRelease-1>", self._on_canvas_release, add="+")
         # 关键：全局监听 Motion。Tk 的空光标会继承父级，内部控件的光标
         # 全部继承自 Canvas；若只在 Canvas 上监听，指针进入内部后 Canvas
         # 收不到事件，边缘设置的调整光标会“卡”在整个窗口上。
@@ -461,14 +507,19 @@ class MainWindow(object):
         self._apply_cursor_for(int(event.x), int(event.y))
 
     def _on_any_motion(self, event: Any) -> None:
-        """全局 Motion：无论指针在窗口哪个控件上，都统一计算光标。
+        """全局 Motion：拖动时补驱缩放，其余时间统一计算光标。
 
         指针可能悬在内部控件（Entry / Combobox / 列表等）上，此时事件坐标
         是相对该控件的，不能直接用于边缘判断——需要换算成相对 Canvas 的
         坐标。复位时只清 Canvas 的光标，内部控件继承到的也就是普通箭头；
         有自己光标的控件（按钮 hand2、输入框 xterm）不受影响。
+
+        调整大小期间 <B1-Motion> 可能因窗口尺寸连续变化被合并 / 丢失，
+        导致只跟手一点点。普通 <Motion> 更频繁，这里一并驱动缩放；
+        尺寸按起始几何绝对计算，重复触发完全幂等。
         """
         if self._resizing:
+            self._on_canvas_resize_motion(event)
             return
         x, y = self._pointer_over_canvas()
         self._apply_cursor_for(x, y)
@@ -524,11 +575,8 @@ class MainWindow(object):
 
         min_w = theme.MIN_WINDOW_W
         min_h = theme.MIN_WINDOW_H
-        try:
-            sw = self.root.winfo_screenwidth()
-            sh = self.root.winfo_screenheight()
-        except tk.TclError:
-            sw, sh = 1920, 1080
+        # 多屏时必须用窗口当前所在显示器的工作区，不能只看主屏尺寸
+        mx, my, sw, sh = current_monitor_workarea(self.root)
         max_w = max(min_w, sw - 20)
         max_h = max(min_h, sh - 60)
 
@@ -544,8 +592,8 @@ class MainWindow(object):
         if "n" in edge:
             height = max(min_h, min(max_h, h0 - dy))
             y = y + (h0 - height)
-        x = max(-width + 60, min(x, sw - 60))
-        y = max(0, min(y, sh - 40))
+        x = max(mx - width + 60, min(x, mx + sw - 60))
+        y = max(my, min(y, my + sh - 40))
         try:
             self.root.geometry("%dx%d+%d+%d" % (width, height, x, y))
         except tk.TclError:
@@ -621,10 +669,12 @@ class MainWindow(object):
         try:
             x = self.root.winfo_x()
             y = self.root.winfo_y()
-            sw = self.root.winfo_screenwidth()
+            mx, my, sw, sh = current_monitor_workarea(self.root)
             width = max(640, min(int(width), sw - 40))
-            if x + width > sw - 10:
-                x = max(0, sw - width - 20)
+            if x + width > mx + sw - 10:
+                x = max(mx, mx + sw - width - 20)
+            x = max(mx, x)
+            y = max(my, y)
             self.root.geometry("%dx%d+%d+%d" % (width, theme.WIN_H, x, y))
         except tk.TclError:
             self.root.geometry("%dx%d" % (width, theme.WIN_H))
