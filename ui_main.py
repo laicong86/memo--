@@ -255,6 +255,16 @@ class MainWindow(object):
             cursor="hand2", highlightthickness=0)
         self.chk_done_only.pack(side="left", padx=(10, 0))
 
+        # 窗口保持最前：勾选后主窗口始终置顶（盖在其它窗口之上）
+        self.var_topmost = tk.BooleanVar(value=False)
+        self.chk_topmost = tk.Checkbutton(
+            header, text="窗口保持最前", variable=self.var_topmost,
+            command=self._on_topmost_changed, font=theme.FONT_LABEL,
+            bg=theme.CARD_BG, fg=theme.TEXT_MUTED, activebackground=theme.CARD_BG,
+            activeforeground=theme.TEXT_DARK, relief="flat",
+            cursor="hand2", highlightthickness=0)
+        self.chk_topmost.pack(side="left", padx=(10, 0))
+
         self._make_button(header, "＋ 新建", self.new_memo, side="left", padx=(14, 4))
         self._make_button(header, "导入", self.open_import, side="left", padx=4)
         self._make_button(header, "设置", self.open_settings, side="left", padx=4)
@@ -551,9 +561,18 @@ class MainWindow(object):
         self.refresh()
 
     def _clear_topmost(self) -> None:
-        """短暂置顶后恢复，保证托盘唤起时窗口可见。"""
+        """短暂置顶后恢复；若勾选了「窗口保持最前」则保持置顶不取消。"""
+        if self.var_topmost.get():
+            return
         try:
             self.root.attributes("-topmost", False)
+        except tk.TclError:
+            pass
+
+    def _on_topmost_changed(self) -> None:
+        """「窗口保持最前」勾选切换：立即应用 / 取消置顶。"""
+        try:
+            self.root.attributes("-topmost", bool(self.var_topmost.get()))
         except tk.TclError:
             pass
 

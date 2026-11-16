@@ -255,6 +255,34 @@ class TestMainWindowSmoke(GuiTestCase):
         window.refresh()
         self.assertNotIn("· 已完成", window.var_status.get())
 
+    # --- 窗口保持最前勾选框 ---
+    def test_topmost_checkbox_exists(self):
+        self.assertEqual(str(self.window.chk_topmost.cget("text")), "窗口保持最前")
+        self.assertFalse(self.window.var_topmost.get())
+
+    def test_topmost_toggle_applies_immediately(self):
+        window = self.window
+        window.var_topmost.set(True)
+        window._on_topmost_changed()
+        self.window.root.update()
+        self.assertEqual(window.root.attributes("-topmost"), 1)
+        window.var_topmost.set(False)
+        window._on_topmost_changed()
+        self.window.root.update()
+        self.assertEqual(window.root.attributes("-topmost"), 0)
+
+    def test_clear_topmost_respects_checkbox(self):
+        window = self.window
+        # 勾选时 _clear_topmost 不应取消置顶（托盘唤起的 250ms 定时器保护）
+        window.var_topmost.set(True)
+        window.root.attributes("-topmost", True)
+        window._clear_topmost()
+        self.assertEqual(window.root.attributes("-topmost"), 1)
+        # 未勾选时恢复原行为：取消置顶
+        window.var_topmost.set(False)
+        window._clear_topmost()
+        self.assertEqual(window.root.attributes("-topmost"), 0)
+
     # --- 导入窗口 ---
     def test_open_import_creates_window_and_imports(self):
         window = self.window
