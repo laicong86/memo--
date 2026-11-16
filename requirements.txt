@@ -1,0 +1,12 @@
+# 运行时依赖：无第三方库（零依赖设计）
+# 仅使用 Python 3.9 标准库：tkinter / json / ctypes / datetime / uuid / threading / queue
+#
+# 系统 Python 3.9.1 已实测具备：tkinter 8.6、Pillow、PyInstaller 6.22.3、pip 20.2.3
+# 本项目刻意不使用 pywin32(win32gui/win32ts)、pystray、PySide6、PyQt5、winsdk，
+# 系统托盘、会话解锁监听与气泡提醒全部通过 ctypes 直调 Win32 API 实现。
+#
+# 仅「打包」阶段需要（系统 Python 3.9 已预装，离线环境请勿重复安装）：
+# PyInstaller>=4.0
+#
+# 说明：本文件全部为注释，`pip install -r requirements.txt` 在离线环境下也会成功，
+#       不会尝试联网安装任何包。
