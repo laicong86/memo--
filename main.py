@@ -102,8 +102,9 @@ class MemoApp(object):
             self.config_path,
             on_request_exit=self.request_exit,
         )
-        # 设置窗口保存快捷键后，立即应用到托盘热键
+        # 设置窗口保存快捷键后，立即应用到托盘热键（呼出 / 新建 两个）
         self.window._hotkey_applier = self.apply_hotkey
+        self.window._new_hotkey_applier = self.apply_new_hotkey
         self._exiting = False
         self.tray = TrayIcon(
             on_show=self.show_window,
@@ -111,14 +112,20 @@ class MemoApp(object):
             on_exit=self.request_exit,
             on_unlock=self.on_unlock,
             on_hotkey=self.toggle_window,
+            on_hotkey_new=self.new_from_tray,
             tooltip="备忘录工具（左键显示 / 右键菜单）",
             dispatcher=self._dispatch,
         )
         self.apply_hotkey(self.config.hotkey)
+        self.apply_new_hotkey(self.config.new_hotkey)
 
     def apply_hotkey(self, hotkey_text: str) -> bool:
         """应用配置的全局快捷键（弹出 / 最小化主窗口）。"""
         return bool(self.tray.set_hotkey(hotkey_text))
+
+    def apply_new_hotkey(self, hotkey_text: str) -> bool:
+        """应用配置的全局快捷键（快速新建事务）。"""
+        return bool(self.tray.set_new_hotkey(hotkey_text))
 
     # ------------------------------------------------------------------
     # 线程调度

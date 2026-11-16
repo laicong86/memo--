@@ -12,6 +12,9 @@
 
 面板由主窗口通过 grid(row=0, column=1) 控制显隐；本模块提供
 show(memo) / hide() / collect() 三个主要接口。
+
+**自动保存**：任一属性或标题变更、进展追加后，经 400ms 防抖自动调用
+on_save 回调写盘；收起面板时立即冲刷尚未写入的改动，不再需要「保存」按钮。
 """
 from __future__ import annotations
 
@@ -33,6 +36,9 @@ from models import (
     now_str,
     parse_time,
 )
+
+# 字段变更后延迟写盘的防抖时长（毫秒）：连续输入只触发一次保存
+AUTO_SAVE_DELAY_MS = 400
 
 
 class DetailPanel(tk.Frame):
@@ -57,6 +63,9 @@ class DetailPanel(tk.Frame):
         self._current = None  # type: Optional[Memo]
         self._logs = []  # type: List[ProgressLog]
         self._calendar = None  # type: Optional[CalendarPopup]
+        self._save_job = None  # type: Any
+        self._suspend = False  # 载入/重置表单时暂停自动保存
+        self._dirty = False
         self._build()
 
     # ------------------------------------------------------------------
@@ -64,12 +73,9 @@ class DetailPanel(tk.Frame):
     # ------------------------------------------------------------------
     def _build(self) -> None:
         """创建全部控件：底部按钮 → 顶部标题 → 左右两栏。"""
-        # 底部按钮先占位，保证在 pack 布局里一定可见
+        # 底部按钮先占位，保证在 pack 布局里一定可见（改动自动保存，无「保存」按钮）
         buttons = tk.Frame(self, bg=theme.CARD_BG)
         buttons.pack(fill="x", side="bottom", padx=14, pady=(6, 14))
-        tk.Button(buttons, text="保存", font=theme.FONT_BODY_BOLD, bg=theme.ACCENT,
-                  fg=theme.TEXT_LIGHT, relief="flat", cursor="hand2", width=10,
-                  command=self._click_save).pack(side="left")
         tk.Button(buttons, text="删除", font=theme.FONT_LABEL, bg=theme.HEADER_BG,
                   fg=theme.DANGER, relief="flat", cursor="hand2", width=8,
                   command=self._click_delete).pack(side="left", padx=8)
@@ -114,6 +120,11 @@ class DetailPanel(tk.Frame):
         self.var_status = tk.StringVar(value=STATUS_LEVELS[0])
         self.var_progress = tk.IntVar(value=0)
         self.var_log = tk.StringVar(value="")
+
+        # 任一属性变更 → 防抖自动保存（写入表单时不触发，见 _suspend）
+        for variable in (self.var_title, self.var_due, self.var_urgency,
+                         self.var_status, self.var_progress):
+            variable.trace_add("write", self._on_field_changed)
 
         self._build_main(main)
         self._build_side(side)
@@ -239,22 +250,32 @@ class DetailPanel(tk.Frame):
     # 对外接口
     # ------------------------------------------------------------------
     def show(self, memo: Memo) -> None:
-        """载入事务数据并在右侧展开面板。"""
+        """载入事务数据并在右侧展开面板（切换前先冲刷未保存改动）。"""
+        self._save_now()
+        self._cancel_save()
         self._close_calendar()
-        self._current = memo
-        self._logs = [ProgressLog(text=log.text, time=log.time) for log in memo.logs]
-        self.var_title.set(memo.title)
-        self.var_due.set(memo.due_at)
-        self.var_urgency.set(memo.urgency if memo.urgency in URGENCY_LEVELS else URGENCY_LEVELS[1])
-        self.var_status.set(memo.status if memo.status in STATUS_LEVELS else STATUS_LEVELS[0])
-        self.var_progress.set(memo.progress)
-        self.var_log.set("")
-        self.var_created.set(memo.created_at)
-        self._render_logs()
+        self._suspend = True
+        try:
+            self._current = memo
+            self._logs = [ProgressLog(text=log.text, time=log.time) for log in memo.logs]
+            self.var_title.set(memo.title)
+            self.var_due.set(memo.due_at)
+            self.var_urgency.set(
+                memo.urgency if memo.urgency in URGENCY_LEVELS else URGENCY_LEVELS[1])
+            self.var_status.set(
+                memo.status if memo.status in STATUS_LEVELS else STATUS_LEVELS[0])
+            self.var_progress.set(memo.progress)
+            self.var_log.set("")
+            self.var_created.set(memo.created_at)
+            self._render_logs()
+        finally:
+            self._suspend = False
+        self._dirty = False
         self.grid(row=0, column=1, sticky="ns", padx=(6, 10), pady=4)
 
     def hide(self) -> None:
-        """收起面板（保留 grid 配置以便再次展开）。"""
+        """收起面板（保留 grid 配置以便再次展开）；先冲刷未保存改动。"""
+        self._save_now()
         self._close_calendar()
         self.grid_remove()
 
@@ -263,10 +284,12 @@ class DetailPanel(tk.Frame):
         return bool(self.winfo_ismapped())
 
     def clear(self) -> None:
-        """清空当前编辑状态。"""
+        """清空当前编辑状态（放弃尚未落盘的改动）。"""
+        self._cancel_save()
         self._close_calendar()
         self._current = None
         self._logs = []
+        self._dirty = False
         self._render_logs()
 
     def collect(self) -> Optional[Memo]:
@@ -346,6 +369,8 @@ class DetailPanel(tk.Frame):
         self._logs.append(ProgressLog(text=entry, time=now_str()))
         self.var_log.set("")
         self._render_logs()
+        self._dirty = True
+        self._schedule_save()
         try:
             self.entry_log.focus_set()
         except tk.TclError:
@@ -394,13 +419,61 @@ class DetailPanel(tk.Frame):
             pass
 
     # ------------------------------------------------------------------
+    # 自动保存
+    # ------------------------------------------------------------------
+    def _on_field_changed(self, *args: Any) -> None:
+        """标题 / 属性字段变更：标记脏数据并安排防抖保存。"""
+        if self._suspend:
+            return
+        self._dirty = True
+        self._schedule_save()
+
+    def _schedule_save(self) -> None:
+        """防抖：连续输入合并为一次写盘。"""
+        self._cancel_save()
+        try:
+            self._save_job = self.after(AUTO_SAVE_DELAY_MS, self._save_now)
+        except tk.TclError:
+            self._save_job = None
+
+    def _cancel_save(self) -> None:
+        """取消尚未触发的自动保存。"""
+        job = self._save_job
+        self._save_job = None
+        if job is None:
+            return
+        try:
+            self.after_cancel(job)
+        except tk.TclError:
+            pass
+
+    def _save_now(self, warn: bool = False) -> bool:
+        """立即写盘；无改动 / 表单非法时跳过，返回是否真正保存。"""
+        self._cancel_save()
+        if self._suspend or not self._dirty or self._current is None:
+            return False
+        due = self.var_due.get().strip()
+        if not is_valid_time_text(due):
+            # 自动保存期间静默跳过非法时间；用户继续编辑后仍会再次触发
+            if warn:
+                messagebox.showwarning(
+                    "输入有误",
+                    "预期完成时间格式不正确。\n请使用 %s / YYYY-MM-DD，或留空。" % TIME_FORMAT,
+                )
+            return False
+        memo = self.collect()
+        if memo is None or self._on_save is None:
+            return False
+        self._on_save(memo)
+        self._dirty = False
+        return True
+
+    # ------------------------------------------------------------------
     # 按钮
     # ------------------------------------------------------------------
     def _click_save(self) -> None:
-        """保存按钮。"""
-        memo = self.collect()
-        if memo is not None and self._on_save is not None:
-            self._on_save(memo)
+        """兼容旧调用：立即保存（界面已移除「保存」按钮）。"""
+        self._save_now(warn=True)
 
     def _click_delete(self) -> None:
         """删除按钮（二次确认后回调）。"""

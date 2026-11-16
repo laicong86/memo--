@@ -36,12 +36,14 @@ from config import (
     DEFAULT_COLOR_MAP,
     DEFAULT_DUE_SOON_HOURS,
     DEFAULT_HOTKEY,
+    DEFAULT_NEW_HOTKEY,
     color_for_memo,
     color_key_for_memo,
     is_valid_hex,
 )
 from hotkey import (
     HOTKEY_PRESETS,
+    NEW_HOTKEY_PRESETS,
     is_valid_hotkey_text,
     normalize_hotkey_text,
 )
@@ -239,9 +241,9 @@ class MainWindow(object):
         header = tk.Frame(self.container, bg=theme.CARD_BG)
         header.pack(fill="x", padx=theme.PAD, pady=(14, 2))
 
-        drag_label = tk.Label(header, text="  备忘录", font=theme.FONT_TITLE,
+        drag_label = tk.Label(header, text="备忘录", font=theme.FONT_TITLE,
                               bg=theme.CARD_BG, fg=theme.TEXT_DARK)
-        drag_label.pack(side="left", padx=(0, 8))
+        drag_label.pack(side="left", padx=(0, 4))
         # 标题左侧的空白区域也可按住拖动窗口
         drag_spacer = tk.Frame(header, width=8, bg=theme.CARD_BG)
         drag_spacer.pack(side="left", padx=(0, 4))
@@ -250,18 +252,16 @@ class MainWindow(object):
             widget.bind("<B1-Motion>", self._on_drag)
 
         tk.Label(header, text="搜索", font=theme.FONT_LABEL, bg=theme.CARD_BG,
-                 fg=theme.TEXT_MUTED).pack(side="left", padx=(10, 4))
+                 fg=theme.TEXT_MUTED).pack(side="left", padx=(8, 4))
         self.var_search = tk.StringVar(value="")
-        tk.Entry(header, textvariable=self.var_search, width=15,
+        tk.Entry(header, textvariable=self.var_search, width=12,
                  font=theme.FONT_LABEL, bg=theme.INPUT_BG, fg=theme.TEXT_DARK,
                  relief="flat", highlightthickness=1,
                  highlightbackground=theme.INPUT_BORDER,
                  highlightcolor=theme.ACCENT).pack(side="left", ipady=3)
         self.var_search.trace_add("write", self._on_search_changed)
 
-        tk.Label(header, text="排序", font=theme.FONT_LABEL, bg=theme.CARD_BG,
-                 fg=theme.TEXT_MUTED).pack(side="left", padx=(14, 4))
-        self.cmb_sort = ttk.Combobox(header, state="readonly", width=15,
+        self.cmb_sort = ttk.Combobox(header, state="readonly", width=12,
                                      font=theme.FONT_LABEL,
                                      values=[label for _, label in SORT_MODES])
         try:
@@ -270,30 +270,30 @@ class MainWindow(object):
             )
         except ValueError:
             self.cmb_sort.current(0)
-        self.cmb_sort.pack(side="left", ipady=2)
+        self.cmb_sort.pack(side="left", padx=(10, 0), ipady=2)
         self.cmb_sort.bind("<<ComboboxSelected>>", self._on_sort_changed)
 
         # 仅显示已完成：勾选后列表只列已完成任务
         self.var_done_only = tk.BooleanVar(value=False)
         self.chk_done_only = tk.Checkbutton(
-            header, text="仅显示已完成", variable=self.var_done_only,
+            header, text="已完成", variable=self.var_done_only,
             command=self._on_done_only_changed, font=theme.FONT_LABEL,
             bg=theme.CARD_BG, fg=theme.TEXT_MUTED, activebackground=theme.CARD_BG,
             activeforeground=theme.TEXT_DARK, relief="flat",
             cursor="hand2", highlightthickness=0)
-        self.chk_done_only.pack(side="left", padx=(10, 0))
+        self.chk_done_only.pack(side="left", padx=(8, 0))
 
         # 窗口保持最前：勾选后主窗口始终置顶（盖在其它窗口之上）
         self.var_topmost = tk.BooleanVar(value=False)
         self.chk_topmost = tk.Checkbutton(
-            header, text="窗口保持最前", variable=self.var_topmost,
+            header, text="保持最前", variable=self.var_topmost,
             command=self._on_topmost_changed, font=theme.FONT_LABEL,
             bg=theme.CARD_BG, fg=theme.TEXT_MUTED, activebackground=theme.CARD_BG,
             activeforeground=theme.TEXT_DARK, relief="flat",
             cursor="hand2", highlightthickness=0)
-        self.chk_topmost.pack(side="left", padx=(10, 0))
+        self.chk_topmost.pack(side="left", padx=(8, 0))
 
-        self._make_button(header, "＋ 新建", self.new_memo, side="left", padx=(14, 4))
+        self._make_button(header, "＋ 新建", self.new_memo, side="left", padx=(10, 4))
         self._make_button(header, "导入", self.open_import, side="left", padx=4)
         self._make_button(header, "设置", self.open_settings, side="left", padx=4)
         self._make_button(header, "—", self.hide_to_tray, side="right", padx=4, width=3)
@@ -835,7 +835,10 @@ class MainWindow(object):
         return memo
 
     def _on_detail_save(self, memo: Memo) -> None:
-        """保存详情：新建则 add，已存在则 update。"""
+        """详情自动保存：新建则 add，已存在则 update。
+
+        不回调 DetailPanel.show()，避免连续输入时反复重置表单与焦点。
+        """
         if self.store.get(memo.id) is not None:
             self.store.update(memo)
         else:
@@ -846,11 +849,11 @@ class MainWindow(object):
             messagebox.showerror("保存失败", "无法写入数据文件：%s" % exc)
             return
         self._selected_id = memo.id
-        self.detail.show(memo)
         self.refresh()
 
     def _on_detail_delete(self, memo_id: str) -> None:
-        """删除事务。"""
+        """删除事务（先放弃待写入的改动，避免刚删又被自动保存写回）。"""
+        self.detail.clear()
         self.store.delete(memo_id)
         try:
             self.store.save()
@@ -1058,7 +1061,8 @@ class MainWindow(object):
                                      fg=theme.TEXT_DARK)
         hotkey_frame.pack(fill="x", padx=14, pady=(6, 4))
         tk.Label(hotkey_frame,
-                 text="快捷呼出：按配置的按键在「弹出 / 最小化」之间切换主窗口。"
+                 text="快捷呼出：在「弹出 / 最小化」之间切换主窗口；"
+                      "快捷新建：弹出窗口并展开新建输入行。"
                       "示例：F2、Ctrl+Alt+M、Ctrl+Shift+F9。修改后点「保存设置」生效。",
                  font=theme.FONT_TINY, bg=theme.CARD_BG, fg=theme.TEXT_MUTED,
                  wraplength=460, justify="left").pack(anchor="w", padx=10,
@@ -1108,6 +1112,47 @@ class MainWindow(object):
                       command=lambda t=preset: _pick_hotkey_preset(t)).pack(
                 side="left", padx=(6, 0))
 
+        # 第二组：快速新建（呼出窗口并展开新建输入行）
+        new_row = tk.Frame(hotkey_frame, bg=theme.CARD_BG)
+        new_row.pack(fill="x", padx=10, pady=(0, 4))
+        tk.Label(new_row, text="快捷新建", font=theme.FONT_LABEL,
+                 bg=theme.CARD_BG, fg=theme.TEXT_DARK, width=14,
+                 anchor="w").pack(side="left")
+        new_hotkey_var = tk.StringVar(value=self.config.new_hotkey)
+        tk.Entry(new_row, textvariable=new_hotkey_var, width=18,
+                 font=theme.FONT_LABEL, bg=theme.INPUT_BG,
+                 fg=theme.TEXT_DARK, relief="flat", highlightthickness=1,
+                 highlightbackground=theme.INPUT_BORDER,
+                 highlightcolor=theme.ACCENT).pack(side="left", ipady=3)
+        new_hotkey_status = tk.Label(new_row, text="", font=theme.FONT_TINY,
+                                     bg=theme.CARD_BG, fg=theme.TEXT_MUTED)
+        new_hotkey_status.pack(side="left", padx=(8, 0))
+
+        def _on_new_hotkey_changed(*args: Any) -> None:
+            text = new_hotkey_var.get().strip()
+            if not text:
+                new_hotkey_status.configure(text="", fg=theme.TEXT_MUTED)
+            elif is_valid_hotkey_text(text):
+                new_hotkey_status.configure(
+                    text="有效：%s" % normalize_hotkey_text(text),
+                    fg=theme.TEXT_MUTED)
+            else:
+                new_hotkey_status.configure(text="无法识别", fg=theme.DANGER)
+
+        new_hotkey_var.trace_add("write", _on_new_hotkey_changed)
+        _on_new_hotkey_changed()
+
+        new_presets_row = tk.Frame(hotkey_frame, bg=theme.CARD_BG)
+        new_presets_row.pack(fill="x", padx=10, pady=(0, 8))
+        tk.Label(new_presets_row, text="常用：", font=theme.FONT_TINY,
+                 bg=theme.CARD_BG, fg=theme.TEXT_MUTED).pack(side="left")
+        for preset in NEW_HOTKEY_PRESETS:
+            tk.Button(new_presets_row, text=preset, font=theme.FONT_TINY,
+                      bg=theme.HEADER_BG, fg=theme.TEXT_DARK, relief="flat",
+                      cursor="hand2",
+                      command=lambda t=preset: new_hotkey_var.set(t)).pack(
+                side="left", padx=(6, 0))
+
         buttons = tk.Frame(window, bg=theme.CARD_BG)
         buttons.pack(fill="x", side="bottom", padx=16, pady=14)
         tk.Button(buttons, text="保存设置", font=theme.FONT_BODY_BOLD,
@@ -1115,13 +1160,13 @@ class MainWindow(object):
                   cursor="hand2", width=10,
                   command=lambda: self._save_settings(
                       window, color_vars, hours_var, sort_var,
-                      hotkey_var)).pack(side="left")
+                      hotkey_var, new_hotkey_var)).pack(side="left")
         tk.Button(buttons, text="恢复默认", font=theme.FONT_LABEL,
                   bg=theme.HEADER_BG, fg=theme.TEXT_DARK, relief="flat",
                   cursor="hand2", width=9,
                   command=lambda: self._reset_settings(
                       color_vars, previews, hours_var, sort_var,
-                      hotkey_var)).pack(
+                      hotkey_var, new_hotkey_var)).pack(
             side="left", padx=8)
         tk.Button(buttons, text="退出程序", font=theme.FONT_LABEL,
                   bg=theme.HEADER_BG, fg=theme.DANGER, relief="flat",
@@ -1145,7 +1190,8 @@ class MainWindow(object):
 
     def _save_settings(self, window: Any, color_vars: Dict[str, tk.StringVar],
                        hours_var: Any, sort_var: Any,
-                       hotkey_var: Any = None) -> None:
+                       hotkey_var: Any = None,
+                       new_hotkey_var: Any = None) -> None:
         """校验并保存设置，立即刷新列表颜色与全局热键。"""
         for key in COLOR_KEYS:
             raw = color_vars[key].get().strip()
@@ -1167,15 +1213,30 @@ class MainWindow(object):
         except (tk.TclError, KeyError):
             pass
         # 快捷键：非法输入直接拦截在设置窗口里，不写盘不生效
-        if hotkey_var is not None:
-            text = hotkey_var.get().strip()
+        parsed_hotkeys = []  # type: List[str]
+        for label, variable in (("快捷呼出", hotkey_var),
+                                ("快捷新建", new_hotkey_var)):
+            if variable is None:
+                continue
+            text = variable.get().strip()
             if not is_valid_hotkey_text(text):
                 messagebox.showerror(
                     "输入有误",
-                    "快捷键「%s」无法识别。\n示例：F2、Ctrl+Alt+M、Ctrl+Shift+F9。" % text,
+                    "%s「%s」无法识别。\n示例：F2、Ctrl+Alt+M、Ctrl+Shift+F9。" %
+                    (label, text),
                     parent=window)
                 return
-            self.config.hotkey = normalize_hotkey_text(text)
+            parsed_hotkeys.append(normalize_hotkey_text(text))
+        if len(parsed_hotkeys) == 2 and parsed_hotkeys[0] == parsed_hotkeys[1]:
+            # 两个热键不能相同：Win32 同一组合注册两次会失败（1409）
+            messagebox.showerror(
+                "输入有误", "「快捷呼出」与「快捷新建」不能设置为同一个按键。",
+                parent=window)
+            return
+        if hotkey_var is not None:
+            self.config.hotkey = parsed_hotkeys[0]
+        if new_hotkey_var is not None:
+            self.config.new_hotkey = parsed_hotkeys[-1]
         try:
             self.config.save(self.config_path)
         except OSError as exc:
@@ -1183,10 +1244,14 @@ class MainWindow(object):
                                  parent=window)
             return
         # 应用新热键（注册在托盘线程，线程安全）
-        if hotkey_var is not None and hasattr(self, "_hotkey_applier") \
-                and self._hotkey_applier is not None:
+        if hotkey_var is not None and getattr(self, "_hotkey_applier", None):
             try:
                 self._hotkey_applier(self.config.hotkey)
+            except Exception:
+                pass
+        if new_hotkey_var is not None and getattr(self, "_new_hotkey_applier", None):
+            try:
+                self._new_hotkey_applier(self.config.new_hotkey)
             except Exception:
                 pass
         self.refresh()
@@ -1194,7 +1259,8 @@ class MainWindow(object):
 
     def _reset_settings(self, color_vars: Dict[str, tk.StringVar],
                         previews: Dict[str, tk.Label], hours_var: Any,
-                        sort_var: Any, hotkey_var: Any = None) -> None:
+                        sort_var: Any, hotkey_var: Any = None,
+                        new_hotkey_var: Any = None) -> None:
         """把设置窗口表单恢复为默认值（不立即写盘，需点击保存）。"""
         for key in COLOR_KEYS:
             color_vars[key].set(DEFAULT_COLOR_MAP[key])
@@ -1206,6 +1272,8 @@ class MainWindow(object):
         sort_var.set(SORT_MODES[0][1])
         if hotkey_var is not None:
             hotkey_var.set(DEFAULT_HOTKEY)
+        if new_hotkey_var is not None:
+            new_hotkey_var.set(DEFAULT_NEW_HOTKEY)
 
     def _exit_from_settings(self) -> None:
         """设置窗口中的退出入口（走完整清理流程）。"""

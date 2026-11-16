@@ -242,7 +242,7 @@ class TestAppConfig(unittest.TestCase):
         data = AppConfig().as_dict()
         self.assertEqual(set(data.keys()),
                          {"version", "color_map", "due_soon_hours", "sort_mode",
-                          "hotkey"})
+                          "hotkey", "new_hotkey"})
         self.assertEqual(data["version"], CONFIG_VERSION)
         self.assertEqual(data["color_map"], DEFAULT_COLOR_MAP)
         self.assertEqual(data["hotkey"], DEFAULT_HOTKEY)

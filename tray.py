@@ -39,7 +39,8 @@ WM_APP = 0x8000
 WM_TRAYICON = WM_APP + 1          # uCallbackMessage
 WM_APP_NOTIFY = WM_APP + 2        # 主线程请求弹气泡
 WM_APP_QUIT = WM_APP + 3          # 主线程请求退出托盘
-WM_APP_HOTKEY = WM_APP + 4        # 主线程请求（重）注册全局热键
+WM_APP_HOTKEY = WM_APP + 4        # 主线程请求（重）注册「呼出 / 最小化」热键
+WM_APP_HOTKEY_NEW = WM_APP + 5    # 主线程请求（重）注册「快速新建」热键
 WM_LBUTTONUP = 0x0202
 WM_LBUTTONDBLCLK = 0x0203
 WM_RBUTTONUP = 0x0205
@@ -239,6 +240,7 @@ class TrayIcon(object):
         on_exit: Optional[Callable[[], None]] = None,
         on_unlock: Optional[Callable[[], None]] = None,
         on_hotkey: Optional[Callable[[], None]] = None,
+        on_hotkey_new: Optional[Callable[[], None]] = None,
         tooltip: str = "备忘录工具",
         dispatcher: Optional[Callable[[Callable[..., Any], Tuple[Any, ...]], None]] = None,
         icon_id: int = 1,
@@ -248,11 +250,15 @@ class TrayIcon(object):
         self._on_exit = on_exit
         self._on_unlock = on_unlock
         self._on_hotkey = on_hotkey
+        self._on_hotkey_new = on_hotkey_new
         self._dispatcher = dispatcher
         self._tooltip = tooltip or "备忘录工具"
         self._icon_id = int(icon_id)
-        self._hotkey = hotkey_mod.GlobalHotkey()
-        self._hotkey_request = (0, 0)  # 待注册的 (modifiers, vk)
+        # 两个全局热键绑定到同一个托盘消息窗口，用不同注册 ID 区分回调
+        self._hotkey = hotkey_mod.GlobalHotkey(key_id=hotkey_mod.HOTKEY_ID_SHOW)
+        self._hotkey_request = (0, 0)  # 待注册的 (modifiers, vk)：呼出 / 最小化
+        self._hotkey_new = hotkey_mod.GlobalHotkey(key_id=hotkey_mod.HOTKEY_ID_NEW)
+        self._hotkey_new_request = (0, 0)  # 待注册的 (modifiers, vk)：快速新建
 
         self._pending = queue.Queue()  # type: queue.Queue
         self._ready = threading.Event()
@@ -310,35 +316,50 @@ class TrayIcon(object):
             except Exception:
                 pass
 
-    def set_hotkey(self, hotkey_text: str) -> bool:
-        """请求（重）注册全局热键（线程安全；注册发生在托盘线程）。
-
-        hotkey_text 形如 "F2" / "Ctrl+Alt+M"；非法文本返回 False 且不改动
-        现有注册。返回 True 表示请求已提交（是否真正注册成功看 is_hotkey_active）。
-        """
+    def _submit_hotkey(self, hotkey_text: str, message: int) -> bool:
+        """把解析后的热键请求投递到托盘线程（内部共用）。"""
         parsed = hotkey_mod.parse_hotkey(hotkey_text)
         if parsed is None:
             return False
-        self._hotkey_request = parsed
+        if message == WM_APP_HOTKEY_NEW:
+            self._hotkey_new_request = parsed
+        else:
+            self._hotkey_request = parsed
         if self._hwnd and IS_WINDOWS and _user32 is not None:
             try:
-                _user32.PostMessageW(
-                    ctypes.c_void_p(self._hwnd), WM_APP_HOTKEY, 0, 0)
+                _user32.PostMessageW(ctypes.c_void_p(self._hwnd), message, 0, 0)
                 return True
             except Exception:
                 return False
         return False
 
+    def set_hotkey(self, hotkey_text: str) -> bool:
+        """请求（重）注册「呼出 / 最小化」全局热键（线程安全）。
+
+        hotkey_text 形如 "F2" / "Ctrl+Alt+M"；非法文本返回 False 且不改动
+        现有注册。返回 True 表示请求已提交（是否真正注册成功看 is_hotkey_active）。
+        """
+        return self._submit_hotkey(hotkey_text, WM_APP_HOTKEY)
+
+    def set_new_hotkey(self, hotkey_text: str) -> bool:
+        """请求（重）注册「快速新建」全局热键（线程安全）。"""
+        return self._submit_hotkey(hotkey_text, WM_APP_HOTKEY_NEW)
+
     def is_hotkey_active(self) -> bool:
-        """全局热键当前是否已成功注册。"""
+        """「呼出 / 最小化」热键当前是否已成功注册。"""
         return self._hotkey.is_registered
 
+    def is_new_hotkey_active(self) -> bool:
+        """「快速新建」热键当前是否已成功注册。"""
+        return self._hotkey_new.is_registered
+
     def unregister_hotkey(self) -> None:
-        """注销全局热键（退出程序时调用）。"""
-        try:
-            self._hotkey.unregister()
-        except Exception:
-            pass
+        """注销两个全局热键（退出程序时调用）。"""
+        for obj in (self._hotkey, self._hotkey_new):
+            try:
+                obj.unregister()
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # 内部：回调派发
@@ -458,6 +479,28 @@ class TrayIcon(object):
 
         return WNDPROC(_proc)
 
+    def _register_hotkey_request(self, hwnd: int, obj: Any,
+                                 request: Tuple[int, int], label: str) -> None:
+        """在托盘线程里注册一个热键；失败时排入气泡提醒。"""
+        modifiers, vk = request
+        if not vk:
+            return
+        if obj.register(hwnd, modifiers, vk):
+            return
+        # 注册失败（常见：1409 快捷键已被其他程序占用），气泡提醒
+        name = hotkey_mod.vk_display_name(int(vk))
+        self._pending.put((
+            "%s快捷键注册失败" % label,
+            "快捷键 %s 可能已被其他程序占用，请在「设置 → 快捷键」里换一个按键。"
+            % name,
+        ))
+        if _user32 is not None:
+            try:
+                _user32.PostMessageW(
+                    ctypes.c_void_p(hwnd), WM_APP_NOTIFY, 0, 0)
+            except Exception:
+                pass
+
     def _handle_message(self, hwnd: int, msg: int, wparam: int, lparam: int) -> int:
         """隐藏窗口消息分发。"""
         if msg == WM_TRAYICON:
@@ -478,33 +521,27 @@ class TrayIcon(object):
 
         if msg == WM_APP_HOTKEY:
             # 在托盘线程里执行注册（RegisterHotKey 绑定线程的消息循环）
-            modifiers, vk = self._hotkey_request
-            if vk:
-                if not self._hotkey.register(hwnd, modifiers, vk):
-                    # 注册失败（常见：1409 快捷键已被其他程序占用），气泡提醒
-                    name = hotkey_mod.vk_display_name(int(vk))
-                    self._pending.put((
-                        "快捷键注册失败",
-                        "快捷键 %s 可能已被其他程序占用，请在「设置 → 快捷键」里换一个按键。"
-                        % name,
-                    ))
-                    if _user32 is not None:
-                        try:
-                            _user32.PostMessageW(
-                                ctypes.c_void_p(hwnd), WM_APP_NOTIFY, 0, 0)
-                        except Exception:
-                            pass
+            self._register_hotkey_request(
+                hwnd, self._hotkey, self._hotkey_request, "")
+            return 0
+
+        if msg == WM_APP_HOTKEY_NEW:
+            self._register_hotkey_request(
+                hwnd, self._hotkey_new, self._hotkey_new_request, "新建")
             return 0
 
         if msg == hotkey_mod.WM_HOTKEY:
-            # 用户按下全局快捷键 → 切换主窗口显示 / 最小化
-            if int(wparam) == self._hotkey._id:
+            # 按注册 ID 区分：呼出 / 最小化 与 快速新建
+            key_id = int(wparam)
+            if key_id == self._hotkey.key_id:
                 self._fire(self._on_hotkey)
+            elif key_id == self._hotkey_new.key_id:
+                self._fire(self._on_hotkey_new)
             return 0
 
         if msg == WM_APP_QUIT:
             self._remove_icon()
-            self._hotkey.unregister()
+            self.unregister_hotkey()
             self._watcher.unregister()
             if _user32 is not None:
                 _user32.DestroyWindow(ctypes.c_void_p(hwnd))
@@ -622,17 +659,12 @@ class TrayIcon(object):
             self._running = True
             self._ready.set()
             self._drain_notifies()  # 处理启动前排队的气泡请求
-            # 处理启动前就提交的全局热键注册请求（失败会弹气泡）
-            modifiers, vk = self._hotkey_request
-            if vk:
-                if not self._hotkey.register(hwnd, modifiers, vk):
-                    name = hotkey_mod.vk_display_name(int(vk))
-                    self._pending.put((
-                        "快捷键注册失败",
-                        "快捷键 %s 可能已被其他程序占用，请在「设置 → 快捷键」里换一个按键。"
-                        % name,
-                    ))
-                    self._drain_notifies()
+            # 处理启动前就提交的两个全局热键注册请求（失败会弹气泡）
+            self._register_hotkey_request(
+                hwnd, self._hotkey, self._hotkey_request, "")
+            self._register_hotkey_request(
+                hwnd, self._hotkey_new, self._hotkey_new_request, "新建")
+            self._drain_notifies()
 
             message = MSG()
             while True:
@@ -645,7 +677,7 @@ class TrayIcon(object):
             pass
         finally:
             self._watcher.unregister()
-            self._hotkey.unregister()
+            self.unregister_hotkey()
             self._remove_icon()
             self._unregister_class()
             self._running = False

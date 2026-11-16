@@ -30,10 +30,11 @@ atexit.register(_DATA_TMP.cleanup)
 import tkinter as tk
 
 import main as main_module
-from config import AppConfig
+from config import AppConfig, COLOR_KEYS, DEFAULT_COLOR_MAP
 from models import (STATUS_DONE, STATUS_LEVELS, TIME_FORMAT, URGENCY_LEVELS,
                     Memo)
 from storage import MemoStore
+import theme
 from ui_main import MainWindow
 
 
@@ -227,7 +228,7 @@ class TestMainWindowSmoke(GuiTestCase):
 
     # --- 仅显示已完成勾选框 ---
     def test_done_only_checkbox_exists(self):
-        self.assertEqual(str(self.window.chk_done_only.cget("text")), "仅显示已完成")
+        self.assertEqual(str(self.window.chk_done_only.cget("text")), "已完成")
         self.assertFalse(self.window.var_done_only.get())
 
     def test_done_only_filters_list(self):
@@ -257,7 +258,7 @@ class TestMainWindowSmoke(GuiTestCase):
 
     # --- 窗口保持最前勾选框 ---
     def test_topmost_checkbox_exists(self):
-        self.assertEqual(str(self.window.chk_topmost.cget("text")), "窗口保持最前")
+        self.assertEqual(str(self.window.chk_topmost.cget("text")), "保持最前")
         self.assertFalse(self.window.var_topmost.get())
 
     def test_topmost_toggle_applies_immediately(self):
@@ -714,6 +715,163 @@ class TestUnlockReminder(unittest.TestCase):
         self.assertIn(_DATA_TMP.name, self.app.memos_path)
         self.assertIn(_DATA_TMP.name, self.app.config_path)
         self.assertTrue(os.path.isfile(self.app.config_path))
+
+
+class TestAutoSaveAndNewHotkey(GuiTestCase):
+    """本轮改动：详情自动保存 + 第二个全局热键的设置入口。"""
+
+    def _color_vars(self):
+        return {key: tk.StringVar(value=DEFAULT_COLOR_MAP[key])
+                for key in COLOR_KEYS}
+
+    def _buttons_text(self, widget=None):
+        texts = []
+        widget = widget or self.window.root
+
+        def walk(node):
+            for child in node.winfo_children():
+                if isinstance(child, tk.Button):
+                    try:
+                        texts.append(str(child.cget("text")))
+                    except tk.TclError:
+                        pass
+                walk(child)
+        walk(widget)
+        return texts
+
+    def test_header_labels_are_compact(self):
+        self.assertEqual(str(self.window.chk_done_only.cget("text")), "已完成")
+        self.assertEqual(str(self.window.chk_topmost.cget("text")), "保持最前")
+        # 「排序」文字标签已移除，仅保留下拉选项框
+        labels = []
+
+        def walk(node):
+            for child in node.winfo_children():
+                if isinstance(child, tk.Label):
+                    try:
+                        labels.append(str(child.cget("text")))
+                    except tk.TclError:
+                        pass
+                walk(child)
+        walk(self.window.container)
+        self.assertNotIn("排序", labels)
+        # 所有顶栏控件必须在默认窗口宽度内完整显示（不被裁切）
+        header = [c for c in self.window.container.winfo_children()
+                  if isinstance(c, tk.Frame)][0]
+        self.assertLessEqual(header.winfo_reqwidth(),
+                             theme.WIN_LIST_W - 2 * theme.PAD)
+
+    def test_detail_has_no_save_button(self):
+        self.window.show_detail(self.store.create_memo(title="无保存按钮"))
+        self.assertNotIn("保存", self._buttons_text())
+
+    def test_detail_auto_saves_field_change(self):
+        memo = self.store.create_memo(title="原文")
+        self.store.add(memo)
+        self.window.show_detail(memo)
+        saved = []
+        original = self.window.detail._on_save
+
+        def spy(updated):
+            saved.append(updated.title)
+            original(updated)
+
+        self.window.detail._on_save = spy
+        self.window.detail.var_title.set("改名")
+        self.assertTrue(self.window.detail._dirty)
+        self.assertTrue(self.window.detail._save_now())
+        self.assertEqual(saved, ["改名"])
+        self.assertEqual(self.store.get(memo.id).title, "改名")
+
+    def test_detail_auto_saves_after_debounce(self):
+        import time
+        memo = self.store.create_memo(title="防抖")
+        self.store.add(memo)
+        self.window.show_detail(memo)
+        saved = []
+        original = self.window.detail._on_save
+        self.window.detail._on_save = (
+            lambda updated: (saved.append(updated.title), original(updated))[1]
+        )
+        self.window.detail.var_title.set("防抖后写入")
+        self.root.update()
+        deadline = time.time() + 0.7
+        while time.time() < deadline:
+            self.root.update()
+            time.sleep(0.02)
+        self.assertEqual(saved, ["防抖后写入"])
+
+    def test_detail_hide_flushes_pending_save(self):
+        memo = self.store.create_memo(title="收起前")
+        self.store.add(memo)
+        self.window.show_detail(memo)
+        self.window.detail.var_title.set("收起时写入")
+        self.window.close_detail()
+        self.assertEqual(self.store.get(memo.id).title, "收起时写入")
+
+    def test_detail_invalid_due_skips_auto_save(self):
+        memo = self.store.create_memo(title="时间非法")
+        self.store.add(memo)
+        self.window.show_detail(memo)
+        self.window.detail.var_due.set("not-a-date")
+        with mock.patch("ui_detail.messagebox.showwarning") as warn:
+            self.assertFalse(self.window.detail._save_now(warn=True))
+        warn.assert_called_once()
+        self.assertEqual(self.store.get(memo.id).due_at, memo.due_at)
+
+    def test_settings_window_exposes_both_hotkey_rows(self):
+        self.window.open_settings()
+        self.root.update()
+        tops = [c for c in self.root.winfo_children()
+                if isinstance(c, tk.Toplevel)]
+        window = tops[0]
+        entries = []
+        labels = []
+
+        def walk(node):
+            for child in node.winfo_children():
+                if isinstance(child, tk.Entry):
+                    entries.append(child)
+                if isinstance(child, tk.Label):
+                    labels.append(str(child.cget("text")))
+                walk(child)
+        walk(window)
+        self.assertIn("快捷新建", labels)
+        self.assertGreaterEqual(len(entries), 2)
+        window.destroy()
+
+    def test_save_settings_applies_both_hotkey_appliers(self):
+        show_applier = mock.Mock()
+        new_applier = mock.Mock()
+        self.window._hotkey_applier = show_applier
+        self.window._new_hotkey_applier = new_applier
+        self.window.open_settings()
+        self.root.update()
+        window = [c for c in self.root.winfo_children()
+                  if isinstance(c, tk.Toplevel)][0]
+        self.window._save_settings(
+            window, self._color_vars(), tk.IntVar(value=48), tk.StringVar(value=""),
+            tk.StringVar(value="f4"), tk.StringVar(value="ctrl+alt+t"))
+        show_applier.assert_called_once_with("F4")
+        new_applier.assert_called_once_with("Ctrl+Alt+T")
+        self.assertEqual(self.config.hotkey, "F4")
+        self.assertEqual(self.config.new_hotkey, "Ctrl+Alt+T")
+
+    def test_save_settings_rejects_duplicate_hotkeys(self):
+        self.window._hotkey_applier = mock.Mock()
+        self.window._new_hotkey_applier = mock.Mock()
+        self.window.open_settings()
+        self.root.update()
+        window = [c for c in self.root.winfo_children()
+                  if isinstance(c, tk.Toplevel)][0]
+        duplicate = tk.StringVar(value="F2")
+        with mock.patch("ui_main.messagebox.showerror") as error:
+            self.window._save_settings(
+                window, self._color_vars(), tk.IntVar(value=48), tk.StringVar(value=""),
+                duplicate, tk.StringVar(value="f2"))
+        error.assert_called_once()
+        self.window._hotkey_applier.assert_not_called()
+        self.window._new_hotkey_applier.assert_not_called()
 
 
 if __name__ == "__main__":

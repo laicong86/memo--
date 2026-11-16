@@ -29,6 +29,7 @@ MOD_WIN = 0x0008
 MOD_NOREPEAT = 0x4000
 
 DEFAULT_HOTKEY = "F2"
+DEFAULT_NEW_HOTKEY = "Ctrl+Alt+N"  # 全局快捷键：快速新建事务
 
 # 修饰键名 → MOD 位
 _MODIFIER_MAP = {
@@ -52,6 +53,12 @@ _SPECIAL_VK = {
 
 # 设置界面里允许直接下拉选择的常用预设
 HOTKEY_PRESETS = ("F2", "F4", "F9", "Ctrl+Alt+M", "Ctrl+Shift+Space")
+# 「新建事务」快捷键的常用预设（避免与呼出键/截屏工具冲突）
+NEW_HOTKEY_PRESETS = ("Ctrl+Alt+N", "Ctrl+Alt+T", "Ctrl+Shift+N", "F9")
+
+# 两个全局热键的注册 ID（必须互不相同，RegisterHotKey 以 ID 区分回调）
+HOTKEY_ID_SHOW = 0xB00B      # 呼出 / 最小化主窗口
+HOTKEY_ID_NEW = 0xB00C       # 快速新建事务
 
 
 def normalize_hotkey_text(text: str) -> str:
@@ -154,9 +161,9 @@ class GlobalHotkey(object):
     WM_HOTKEY 到达后由托盘消息循环转交回调。
     """
 
-    def __init__(self):
+    def __init__(self, key_id: int = HOTKEY_ID_SHOW):
         self._registered = False
-        self._id = 0xB00B  # 任意非零 id
+        self._id = key_id  # 注册 ID，用于区分同一消息窗口上的多个热键
         self._modifiers = 0
         self._vk = 0
         self._hwnd = 0
@@ -178,6 +185,11 @@ class GlobalHotkey(object):
     def is_registered(self) -> bool:
         """当前是否已成功注册热键。"""
         return self._registered
+
+    @property
+    def key_id(self) -> int:
+        """注册 ID：WM_HOTKEY 的 wParam，用于区分多个全局热键。"""
+        return self._id
 
     @property
     def vk(self) -> int:

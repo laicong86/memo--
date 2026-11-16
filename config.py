@@ -34,6 +34,7 @@ from models import (
 )
 from hotkey import (
     DEFAULT_HOTKEY,
+    DEFAULT_NEW_HOTKEY,
     is_valid_hotkey_text,
     normalize_hotkey_text as normalize_text,
 )
@@ -77,6 +78,7 @@ COLOR_PRESETS = (
 DEFAULT_DUE_SOON_HOURS = 48
 DEFAULT_SORT_MODE = SORT_CREATED
 DEFAULT_HOTKEY = "F2"  # 全局快捷键：弹出 / 最小化主窗口
+DEFAULT_NEW_HOTKEY = "Ctrl+Alt+N"  # 全局快捷键：快速新建事务
 CONFIG_VERSION = 1
 
 _MAX_HOURS = 24 * 365
@@ -133,6 +135,7 @@ class AppConfig(object):
         due_soon_hours: int = DEFAULT_DUE_SOON_HOURS,
         sort_mode: str = DEFAULT_SORT_MODE,
         hotkey: str = DEFAULT_HOTKEY,
+        new_hotkey: str = DEFAULT_NEW_HOTKEY,
         path: str = "",
     ):
         self.path = path or ""
@@ -147,6 +150,11 @@ class AppConfig(object):
         self.hotkey = (
             hotkey if isinstance(hotkey, str) and is_valid_hotkey_text(hotkey)
             else DEFAULT_HOTKEY
+        )
+        self.new_hotkey = (
+            new_hotkey
+            if isinstance(new_hotkey, str) and is_valid_hotkey_text(new_hotkey)
+            else DEFAULT_NEW_HOTKEY
         )
         if color_map:
             self.apply_colors(color_map)
@@ -190,12 +198,17 @@ class AppConfig(object):
         # 先做类型判定，避免 list/dict 等不可哈希值参与 dict 成员判断
         if isinstance(mode, str) and mode in SORT_MODE_LABELS:
             self.sort_mode = mode
-        # 快捷键：非法值一律回退默认 F2，绝不冒泡到启动链路
+        # 快捷键：非法值一律回退默认值，绝不冒泡到启动链路
         hotkey_value = data.get("hotkey")
         if isinstance(hotkey_value, str) and is_valid_hotkey_text(hotkey_value):
             self.hotkey = normalize_text(hotkey_value)
         else:
             self.hotkey = DEFAULT_HOTKEY
+        new_hotkey_value = data.get("new_hotkey")
+        if isinstance(new_hotkey_value, str) and is_valid_hotkey_text(new_hotkey_value):
+            self.new_hotkey = normalize_text(new_hotkey_value)
+        else:
+            self.new_hotkey = DEFAULT_NEW_HOTKEY
 
     def as_dict(self) -> Dict[str, Any]:
         """序列化为可写 JSON 的字典。"""
@@ -205,6 +218,7 @@ class AppConfig(object):
             "due_soon_hours": self.due_soon_hours,
             "sort_mode": self.sort_mode,
             "hotkey": self.hotkey,
+            "new_hotkey": self.new_hotkey,
         }
 
     def save(self, path: str = "") -> bool:

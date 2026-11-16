@@ -35,8 +35,8 @@ FONT_TINY_PLAIN = (FONT_FAMILY, 8)  # 详情属性一字排开时用的小号常
 # 布局尺寸
 ROW_HEIGHT = 58
 CARD_RADIUS = 22
-WIN_LIST_W = 780
-WIN_DETAIL_W = 1280
+WIN_LIST_W = 860   # 顶栏容纳搜索/排序/两个勾选/新建/导入/设置/窗口按钮
+WIN_DETAIL_W = 1360
 WIN_H = 560
 MIN_WINDOW_W = 480  # 边缘拖拽调整大小时的宽度下限
 MIN_WINDOW_H = 320  # 边缘拖拽调整大小时的高度下限

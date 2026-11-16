@@ -161,5 +161,64 @@ class TestConfigHotkeyPersistence(unittest.TestCase):
         self.assertEqual(loaded.hotkey, "Ctrl+Shift+F9")
 
 
+class TestNewMemoHotkey(unittest.TestCase):
+    """「快速新建」第二全局热键：常量、请求提交、消息分发与配置持久化。"""
+
+    def test_default_new_hotkey_parses_and_ids_are_distinct(self):
+        from hotkey import DEFAULT_NEW_HOTKEY, HOTKEY_ID_NEW, HOTKEY_ID_SHOW
+        self.assertEqual(DEFAULT_NEW_HOTKEY, "Ctrl+Alt+N")
+        self.assertEqual(parse_hotkey(DEFAULT_NEW_HOTKEY),
+                         (MOD_CONTROL | MOD_ALT, ord("N")))
+        self.assertNotEqual(HOTKEY_ID_NEW, HOTKEY_ID_SHOW)
+
+    def test_key_id_property_exposed_for_dispatch(self):
+        from hotkey import HOTKEY_ID_NEW
+        self.assertEqual(GlobalHotkey(key_id=HOTKEY_ID_NEW).key_id, HOTKEY_ID_NEW)
+
+    def test_set_new_hotkey_records_request_and_rejects_garbage(self):
+        tray = TrayIcon()
+        self.assertFalse(tray.set_new_hotkey("bogus key"))
+        self.assertEqual(tray._hotkey_new_request, (0, 0))
+        # 无托盘窗口时返回 False，但请求仍被记录，供线程启动后注册
+        self.assertFalse(tray.set_new_hotkey("ctrl+alt+t"))
+        self.assertEqual(tray._hotkey_new_request,
+                         (MOD_CONTROL | MOD_ALT, ord("T")))
+        tray.unregister_hotkey()
+        self.assertFalse(tray.is_new_hotkey_active())
+
+    def test_wm_hotkey_dispatches_by_registration_id(self):
+        from hotkey import HOTKEY_ID_NEW, HOTKEY_ID_SHOW, WM_HOTKEY
+        fired = []
+        tray = TrayIcon(
+            on_hotkey=lambda: fired.append("show"),
+            on_hotkey_new=lambda: fired.append("new"),
+        )
+        tray._handle_message(0, WM_HOTKEY, HOTKEY_ID_SHOW, 0)
+        tray._handle_message(0, WM_HOTKEY, HOTKEY_ID_NEW, 0)
+        tray._handle_message(0, WM_HOTKEY, 0xDEAD, 0)  # 未知 ID 忽略
+        self.assertEqual(fired, ["show", "new"])
+
+    def test_config_new_hotkey_persists_and_normalizes(self):
+        from config import AppConfig
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "config.json")
+            AppConfig(new_hotkey="ctrl+shift+n").save(path)
+            loaded = AppConfig.load(path)
+        self.assertEqual(loaded.new_hotkey, "Ctrl+Shift+N")
+        self.assertEqual(loaded.as_dict()["new_hotkey"], "Ctrl+Shift+N")
+
+    def test_config_invalid_new_hotkey_falls_back(self):
+        from config import AppConfig
+        from hotkey import DEFAULT_NEW_HOTKEY
+        self.assertEqual(AppConfig(new_hotkey="???").new_hotkey,
+                         DEFAULT_NEW_HOTKEY)
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "config.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump({"new_hotkey": "not-a-key"}, handle)
+            self.assertEqual(AppConfig.load(path).new_hotkey,
+                             DEFAULT_NEW_HOTKEY)
+
+
 if __name__ == "__main__":
     unittest.main()
