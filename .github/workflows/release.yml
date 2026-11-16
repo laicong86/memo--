@@ -20,12 +20,19 @@ jobs:
       - name: Verify asset
         run: test -s release/MemoTool.exe
 
-      - name: Create GitHub Release
+      - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            release/MemoTool.exe \
-            --title "MemoTool ${GITHUB_REF_NAME}" \
-            --generate-notes \
-            --verify-tag
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release edit "${GITHUB_REF_NAME}" \
+              --title "MemoTool ${GITHUB_REF_NAME}" \
+              --notes-file release/NOTES.md
+            gh release upload "${GITHUB_REF_NAME}" release/MemoTool.exe --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              release/MemoTool.exe \
+              --title "MemoTool ${GITHUB_REF_NAME}" \
+              --notes-file release/NOTES.md \
+              --verify-tag
+          fi
