@@ -1,0 +1,46 @@
+name: Build and publish release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+          architecture: x64
+
+      - name: Install build tools
+        run: python -m pip install --upgrade pip pyinstaller
+
+      - name: Run tests
+        run: python -m unittest discover -s tests
+
+      - name: Build exe
+        run: python build.py
+
+      - name: Verify artifact
+        shell: bash
+        run: test -s dist/MemoTool.exe
+
+      - name: Create GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/MemoTool.exe \
+            --title "MemoTool ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --verify-tag
