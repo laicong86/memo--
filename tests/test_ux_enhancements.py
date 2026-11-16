@@ -59,6 +59,18 @@ class TestCalendarPlacement(unittest.TestCase):
         x, y = place_near_host((5000, 5000, 60, 25), (320, 300), self.HOST)
         self.assertEqual((x, y), (1332, 752))
 
+    def test_place_keeps_negative_x_on_left_monitor(self):
+        """主窗口在左侧副屏（负 x）时，弹窗不能被 max(0,...) 甩回主屏。"""
+        # 左侧大屏工作区 x=-1920..0，主窗口落在 -1500..-640
+        host = (-1500, 100, 860, 560)
+        x, y = place_near_host((-700, 300, 60, 25), (320, 300), host)
+        self.assertLess(x, 0)  # 关键：保持负坐标
+        hx, hy, hw, hh = host
+        self.assertGreaterEqual(x, hx)
+        self.assertLessEqual(x + 320, hx + hw)
+        self.assertGreaterEqual(y, hy)
+        self.assertLessEqual(y + 300, hy + hh)
+
 
 class TestUnlockDueLogic(unittest.TestCase):
     NOW = datetime(2026, 11, 16, 12, 0, 0)

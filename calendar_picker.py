@@ -134,7 +134,9 @@ def place_near_host(
         y = ay - ph - gap
     x = max(hx + edge, min(x, hx + hw - pw - edge))
     y = max(hy + edge, min(y, hy + hh - ph - edge))
-    return max(0, x), max(0, y)
+    # 不能再对 x/y 做 max(0, ...)：Windows 多屏里左侧显示器坐标是负值，
+    # 钳到 0 会把弹窗甩回主屏。上面已按 host 边界夹过，负值本身就是正确位置。
+    return x, y
 
 
 # ---------------------------------------------------------------------------
