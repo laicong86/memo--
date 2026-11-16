@@ -33,15 +33,20 @@ FONT_TINY = (FONT_FAMILY, 8, "bold")
 FONT_TINY_PLAIN = (FONT_FAMILY, 8)  # 详情属性一字排开时用的小号常规字体
 
 # 布局尺寸
+PAD = 18
 ROW_HEIGHT = 58
 CARD_RADIUS = 22
 WIN_LIST_W = 860   # 顶栏容纳搜索/排序/两个勾选/新建/导入/设置/窗口按钮
-WIN_DETAIL_W = 1360
 WIN_H = 560
+# 列表与详情之间有一条可拖拽分隔条；展开详情时列表区宽度保持 LIST_W 不变，
+# 窗口只加宽 分隔条 + 详情面板 的宽度，避免挤压任务列表。
+SPLIT_W = 6
+LIST_W = WIN_LIST_W - 2 * PAD  # 824
+MIN_LIST_W = 420
+MIN_DETAIL_W = 360
+DETAIL_PANEL_W = 500
+DETAIL_W = SPLIT_W + DETAIL_PANEL_W  # 展开时窗口增加的总宽度
+WIN_DETAIL_W = WIN_LIST_W + DETAIL_W
 MIN_WINDOW_W = 480  # 边缘拖拽调整大小时的宽度下限
 MIN_WINDOW_H = 320  # 边缘拖拽调整大小时的高度下限
 RESIZE_BAND = 8  # 窗口边缘热区宽度（像素），进入该范围光标变为调整形状
-# 详情面板内部分成「左侧编辑区 + 右侧属性区」，需要比原来更宽；
-# 窗口展开时增加的宽度与面板宽度保持一致，避免列表被挤压。
-DETAIL_W = 500
-PAD = 18

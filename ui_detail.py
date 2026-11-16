@@ -3,15 +3,16 @@
 
 双击列表行后在窗口右侧展开，布局分为两栏：
 
-* 顶部标题行：「任务详情」大标题右侧紧跟**属性条**——预期完成时间、
-  紧急程度、状态、进度四个属性横向一字排开（标签在上、选择控件在下），
-  预期完成时间点「日历」弹出月历选择。
+* 顶部标题行：「任务详情」大标题右侧紧跟**属性条**——紧急程度、状态、
+  进度三个属性横向一字排开（标签在上、选择控件在下）。
+* 标题下方：创建时间一行，紧接一行以 `to` 开头的预期完成时间
+  （日期框 + 时间框 + 日历按钮），点「日历」弹出月历选择。
 * 下方编辑区：标题、**历史进展（按时间倒序，最近在最前，占满原备注区，
   格式「日期：进展」）**、写进展输入框（回车即记录，自动附加本机系统时间戳）。
   备注正文（memo.content）不在详情面板展示，保存时原样保留。
 
-面板由主窗口通过 grid(row=0, column=1) 控制显隐；本模块提供
-show(memo) / hide() / collect() 三个主要接口。
+面板由主窗口通过 grid(row=0, column=2) 控制显隐（列 1 是可拖拽分隔条）；
+本模块提供 show(memo) / hide() / collect() 三个主要接口。
 
 **自动保存**：任一属性或标题变更、进展追加后，经 400ms 防抖自动调用
 on_save 回调写盘；收起面板时立即冲刷尚未写入的改动，不再需要「保存」按钮。
@@ -56,7 +57,7 @@ class DetailPanel(tk.Frame):
         on_close: Optional[Callable[[], None]] = None,
         config: Any = None,
     ):
-        super().__init__(master, bg=theme.CARD_BG, width=theme.DETAIL_W,
+        super().__init__(master, bg=theme.CARD_BG, width=theme.DETAIL_PANEL_W,
                          highlightthickness=0, bd=0)
         self.pack_propagate(False)
         self.grid_propagate(False)
@@ -76,7 +77,26 @@ class DetailPanel(tk.Frame):
     # 构建界面
     # ------------------------------------------------------------------
     def _build(self) -> None:
-        """创建全部控件：底部按钮 → 顶部标题 → 左右两栏。"""
+        """创建全部控件：表单变量 → 底部按钮 → 标题 / 日期 → 左右两栏。"""
+        # 表单变量（保持变量名不变，供主窗口与回归测试使用）
+        self.var_title = tk.StringVar(value="")
+        self.var_due = tk.StringVar(value="")  # 完整时间戳（数据层唯一真值）
+        self.var_due_date = tk.StringVar(value="")  # YYYY-MM-DD 展示字段
+        self.var_due_time = tk.StringVar(value="")  # HH:MM 展示字段（如 15:30）
+        self.var_urgency = tk.StringVar(value=URGENCY_LEVELS[1])
+        self.var_status = tk.StringVar(value=STATUS_LEVELS[0])
+        self.var_progress = tk.IntVar(value=0)
+        self.var_log = tk.StringVar(value="")
+        self.var_created = tk.StringVar(value="")
+
+        # 任一属性变更 → 防抖自动保存（写入表单时不触发，见 _suspend）
+        for variable in (self.var_title, self.var_due, self.var_urgency,
+                         self.var_status, self.var_progress):
+            variable.trace_add("write", self._on_field_changed)
+        # 日期 / 时间字段改动 → 合成完整 due → 由 var_due 的 trace 触发保存
+        for variable in (self.var_due_date, self.var_due_time):
+            variable.trace_add("write", self._on_due_part_changed)
+
         # 底部按钮先占位，保证在 pack 布局里一定可见（改动自动保存，无「保存」按钮）
         buttons = tk.Frame(self, bg=theme.CARD_BG)
         buttons.pack(fill="x", side="bottom", padx=14, pady=(6, 14))
@@ -102,10 +122,41 @@ class DetailPanel(tk.Frame):
                   pady=(2, 0))
         self.side = side
 
-        self.var_created = tk.StringVar(value="")
-        tk.Label(self, textvariable=self.var_created, font=theme.FONT_SMALL,
+        # 创建时间 + 其下方的「to 预期完成时间」，两行紧贴标题
+        info = tk.Frame(self, bg=theme.CARD_BG)
+        info.pack(fill="x", padx=14, pady=(0, 8))
+
+        tk.Label(info, textvariable=self.var_created, font=theme.FONT_SMALL,
                  bg=theme.CARD_BG, fg=theme.TEXT_MUTED, anchor="w",
-                 justify="left").pack(fill="x", padx=14, pady=(0, 8))
+                 justify="left").pack(fill="x")
+
+        due_row = tk.Frame(info, bg=theme.CARD_BG)
+        due_row.pack(fill="x", pady=(4, 0))
+        tk.Label(due_row, text="to", font=theme.FONT_SMALL,
+                 bg=theme.CARD_BG, fg=theme.TEXT_MUTED).pack(
+            side="left", padx=(0, 6))
+        self.entry_due = tk.Entry(due_row, textvariable=self.var_due_date,
+                                  width=12, font=theme.FONT_SMALL,
+                                  bg=theme.INPUT_BG, fg=theme.TEXT_DARK,
+                                  relief="flat", highlightthickness=1,
+                                  highlightbackground=theme.INPUT_BORDER,
+                                  highlightcolor=theme.ACCENT)
+        self.entry_due.pack(side="left")
+        tk.Label(due_row, text=":", font=theme.FONT_SMALL,
+                 bg=theme.CARD_BG, fg=theme.TEXT_MUTED).pack(
+            side="left", padx=(2, 2))
+        self.entry_due_time = tk.Entry(due_row, textvariable=self.var_due_time,
+                                       width=7, font=theme.FONT_SMALL,
+                                       bg=theme.INPUT_BG, fg=theme.TEXT_DARK,
+                                       relief="flat", highlightthickness=1,
+                                       highlightbackground=theme.INPUT_BORDER,
+                                       highlightcolor=theme.ACCENT)
+        self.entry_due_time.pack(side="left")
+        self.btn_due = tk.Button(due_row, text="日历", width=5,
+                                 font=theme.FONT_SMALL, bg=theme.ACCENT,
+                                 fg=theme.TEXT_LIGHT, relief="flat",
+                                 cursor="hand2", command=self._open_calendar)
+        self.btn_due.pack(side="left", padx=(8, 0))
 
         body = tk.Frame(self, bg=theme.CARD_BG)
         body.pack(fill="both", expand=True, padx=14, pady=(0, 2))
@@ -116,24 +167,6 @@ class DetailPanel(tk.Frame):
         main = tk.Frame(body, bg=theme.CARD_BG)
         main.grid(row=0, column=0, sticky="nsew")
         main.columnconfigure(0, weight=1)
-
-        # 表单变量（保持变量名不变，供主窗口与回归测试使用）
-        self.var_title = tk.StringVar(value="")
-        self.var_due = tk.StringVar(value="")  # 完整时间戳（数据层唯一真值）
-        self.var_due_date = tk.StringVar(value="")  # YYYY-MM-DD 展示字段
-        self.var_due_time = tk.StringVar(value="")  # HH:MM 展示字段（如 15:30）
-        self.var_urgency = tk.StringVar(value=URGENCY_LEVELS[1])
-        self.var_status = tk.StringVar(value=STATUS_LEVELS[0])
-        self.var_progress = tk.IntVar(value=0)
-        self.var_log = tk.StringVar(value="")
-
-        # 任一属性变更 → 防抖自动保存（写入表单时不触发，见 _suspend）
-        for variable in (self.var_title, self.var_due, self.var_urgency,
-                         self.var_status, self.var_progress):
-            variable.trace_add("write", self._on_field_changed)
-        # 日期 / 时间字段改动 → 合成完整 due → 由 var_due 的 trace 触发保存
-        for variable in (self.var_due_date, self.var_due_time):
-            variable.trace_add("write", self._on_due_part_changed)
 
         self._build_main(main)
         self._build_side(side)
@@ -183,62 +216,33 @@ class DetailPanel(tk.Frame):
         self.btn_append.grid(row=0, column=1, padx=(6, 0))
 
     def _build_side(self, side: Any) -> None:
-        """「任务详情」标题右侧的属性条。
+        """「任务详情」标题右侧的属性条：紧急程度 / 状态 / 进度。
 
-        四个属性横向一字排开（列 1-4），列 0 留空做弹性间隔，
-        把属性推到标题右侧；每列上面是字段名标签、下面是选择控件
-        （输入框 + 日历按钮 / 下拉框 / 步进框）。
+        三个属性横向一字排开（列 1-3），列 0 留空做弹性间隔，
+        把属性推到标题右侧；每列上面是字段名标签、下面是选择控件。
+        预期完成时间已移到创建时间下方，不再占据属性条。
         """
         side.columnconfigure(0, weight=1)  # 弹性空白，把属性推向右侧
-        for col in (1, 2, 3, 4):
+        for col in (1, 2, 3):
             side.columnconfigure(col, weight=0)
 
-        self._side_label(side, "预期完成时间", 1)
-        due_cell = tk.Frame(side, bg=theme.CARD_BG)
-        due_cell.grid(row=1, column=1, sticky="w", padx=(0, 10))
-        due_cell.columnconfigure(0, weight=1)
-        self.entry_due = tk.Entry(due_cell, textvariable=self.var_due_date,
-                                  width=11,
-                                  font=theme.FONT_TINY_PLAIN, bg=theme.INPUT_BG,
-                                  fg=theme.TEXT_DARK, relief="flat",
-                                  highlightthickness=1,
-                                  highlightbackground=theme.INPUT_BORDER,
-                                  highlightcolor=theme.ACCENT)
-        self.entry_due.grid(row=0, column=0, sticky="ew")
-        # 时间单独一格，只填具体时间（如 15:30），无需写完整时间戳
-        tk.Label(due_cell, text=":", font=theme.FONT_TINY_PLAIN,
-                 bg=theme.CARD_BG, fg=theme.TEXT_MUTED).grid(row=0, column=1)
-        self.entry_due_time = tk.Entry(due_cell, textvariable=self.var_due_time,
-                                       width=6,
-                                       font=theme.FONT_TINY_PLAIN,
-                                       bg=theme.INPUT_BG, fg=theme.TEXT_DARK,
-                                       relief="flat", highlightthickness=1,
-                                       highlightbackground=theme.INPUT_BORDER,
-                                       highlightcolor=theme.ACCENT)
-        self.entry_due_time.grid(row=0, column=2, padx=(2, 0))
-        self.btn_due = tk.Button(due_cell, text="日历", width=4,
-                                 font=theme.FONT_TINY_PLAIN, bg=theme.ACCENT,
-                                 fg=theme.TEXT_LIGHT, relief="flat",
-                                 cursor="hand2", command=self._open_calendar)
-        self.btn_due.grid(row=0, column=3, padx=(3, 0))
-
-        self._side_label(side, "紧急程度", 2)
+        self._side_label(side, "紧急程度", 1)
         self.cmb_urgency = ttk.Combobox(side, textvariable=self.var_urgency,
                                         values=list(URGENCY_LEVELS),
                                         state="readonly", width=6,
                                         font=theme.FONT_TINY_PLAIN)
-        self.cmb_urgency.grid(row=1, column=2, sticky="w", padx=(0, 10))
+        self.cmb_urgency.grid(row=1, column=1, sticky="w", padx=(0, 10))
 
-        self._side_label(side, "状态", 3)
+        self._side_label(side, "状态", 2)
         self.cmb_status = ttk.Combobox(side, textvariable=self.var_status,
                                        values=list(STATUS_LEVELS),
                                        state="readonly", width=6,
                                        font=theme.FONT_TINY_PLAIN)
-        self.cmb_status.grid(row=1, column=3, sticky="w", padx=(0, 10))
+        self.cmb_status.grid(row=1, column=2, sticky="w", padx=(0, 10))
 
-        self._side_label(side, "进度", 4)
+        self._side_label(side, "进度", 3)
         progress_cell = tk.Frame(side, bg=theme.CARD_BG)
-        progress_cell.grid(row=1, column=4, sticky="w")
+        progress_cell.grid(row=1, column=3, sticky="w")
         self.spin_progress = tk.Spinbox(progress_cell, from_=0, to=100,
                                         increment=5,
                                         textvariable=self.var_progress, width=4,
@@ -291,7 +295,7 @@ class DetailPanel(tk.Frame):
         finally:
             self._suspend = False
         self._dirty = False
-        self.grid(row=0, column=1, sticky="ns", padx=(6, 10), pady=4)
+        self.grid(row=0, column=2, sticky="nsew", padx=(0, 6), pady=4)
 
     def hide(self) -> None:
         """收起面板（保留 grid 配置以便再次展开）；先冲刷未保存改动。"""

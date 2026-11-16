@@ -208,14 +208,14 @@ class TestRequirementEvidence(unittest.TestCase):
         self.assertIn('<Double-Button-1>', ui)
         self.assertIn("self._on_row_double_click", ui)
         self.assertIn("self.show_detail(memo)", ui)
-        self.assertIn("self.grid(row=0, column=1", detail)
+        self.assertIn("self.grid(row=0, column=2", detail)
         self.assertNotIn("self.txt_content", detail)
         self.assertIn("def _append_log", detail)
 
     def test_req5_created_at_is_read_only_in_detail(self):
         detail = _read("ui_detail.py")
         self.assertIn("created_at=self._current.created_at", detail)
-        self.assertIn("tk.Label(self, textvariable=self.var_created", detail)
+        self.assertIn("tk.Label(info, textvariable=self.var_created", detail)
         self.assertNotIn("Entry(form, textvariable=self.var_created", detail)
         self.assertNotIn("Spinbox(form, textvariable=self.var_created", detail)
 

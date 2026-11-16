@@ -418,13 +418,21 @@ class MainWindow(object):
     # 主体：列表 + 详情面板
     # ------------------------------------------------------------------
     def _build_body(self) -> None:
-        """构建列表 Canvas 与右侧详情面板（grid 布局，详情默认隐藏）。"""
+        """构建列表 Canvas、可拖拽分隔条与右侧详情面板。
+
+        列表列固定宽度（展开详情也不变窄），分隔条列只在详情展开时占位，
+        详情列吸收窗口剩余的加宽部分；拖动分隔条只改列表/详情两侧占比。
+        """
         body = tk.Frame(self.container, bg=theme.CARD_BG)
         body.pack(fill="both", expand=True, padx=theme.PAD, pady=(0, 4))
-        body.columnconfigure(0, weight=1)
-        body.columnconfigure(1, weight=0)
+        body.columnconfigure(0, weight=0, minsize=theme.LIST_W)
+        body.columnconfigure(1, weight=0, minsize=0)
+        body.columnconfigure(2, weight=1)
         body.rowconfigure(0, weight=1)
         self.body = body
+        self._list_w = theme.LIST_W
+        self._split_ox = 0
+        self._split_w0 = theme.LIST_W
 
         self.list_canvas = tk.Canvas(body, bg=theme.CARD_BG,
                                      highlightthickness=0, bd=0)
@@ -433,6 +441,14 @@ class MainWindow(object):
         self.list_canvas.bind("<Button-1>", self._on_row_click)
         self.list_canvas.bind("<Double-Button-1>", self._on_row_double_click)
         self.list_canvas.bind("<MouseWheel>", self._on_mouse_wheel)
+
+        splitter = tk.Frame(body, bg=theme.DIVIDER, width=theme.SPLIT_W,
+                            cursor="sb_h_double_arrow")
+        splitter.grid(row=0, column=1, sticky="ns")
+        splitter.grid_remove()
+        splitter.bind("<ButtonPress-1>", self._start_split_drag)
+        splitter.bind("<B1-Motion>", self._on_split_drag)
+        self.splitter = splitter
 
         self.detail = DetailPanel(
             body,
@@ -470,6 +486,32 @@ class MainWindow(object):
         x = int(event.x_root) - self._drag_ox
         y = int(event.y_root) - self._drag_oy
         self.root.geometry("+%d+%d" % (x, y))
+
+    # ------------------------------------------------------------------
+    # 列表 / 详情分隔条：按住左右拖动调整两边占比
+    # ------------------------------------------------------------------
+    def _start_split_drag(self, event: Any) -> None:
+        """记录分隔条拖动起点与当时的列表宽度。"""
+        self._split_ox = int(event.x_root)
+        self._split_w0 = self._list_w
+
+    def _on_split_drag(self, event: Any) -> None:
+        """拖动分隔条：只改列表列宽，详情列自动吸收剩余空间。"""
+        if not self._detail_open:
+            return
+        delta = int(event.x_root) - self._split_ox
+        total = max(theme.MIN_LIST_W + theme.MIN_DETAIL_W,
+                    self.body.winfo_width() - theme.SPLIT_W)
+        # 屏幕放不下「默认列表宽 + 最小详情宽」时，宁可让详情更窄，
+        # 也不能把列表压得比展开前还小（用户要求列表尺寸不受影响）。
+        max_list = max(theme.LIST_W, total - theme.MIN_DETAIL_W)
+        width = max(theme.MIN_LIST_W,
+                    min(self._split_w0 + delta, max_list))
+        if width == self._list_w:
+            return
+        self._list_w = width
+        self.body.columnconfigure(0, minsize=width)
+        self.draw_rows()
 
     # ------------------------------------------------------------------
     # 窗口边缘自由调整大小（8 方向）
@@ -820,17 +862,23 @@ class MainWindow(object):
     # 详情面板联动
     # ------------------------------------------------------------------
     def show_detail(self, memo: Memo) -> None:
-        """展开右侧详情面板并加宽窗口。"""
+        """展开右侧详情面板：只加宽窗口，列表区宽度保持不变。"""
         self._selected_id = memo.id
         self._detail_open = True
         self.detail.show(memo)
+        self.body.columnconfigure(1, minsize=theme.SPLIT_W)
+        self.splitter.grid()
         self._set_window_width(theme.WIN_DETAIL_W)
         self.draw_rows()
 
     def close_detail(self) -> None:
-        """收起右侧详情面板并恢复窗口宽度。"""
+        """收起详情面板，恢复窗口宽度与列表默认宽度。"""
         self._detail_open = False
         self.detail.hide()
+        self.splitter.grid_remove()
+        self.body.columnconfigure(1, minsize=0)
+        self._list_w = theme.LIST_W
+        self.body.columnconfigure(0, minsize=theme.LIST_W)
         self._set_window_width(theme.WIN_LIST_W)
         self.draw_rows()
 

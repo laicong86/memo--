@@ -177,6 +177,50 @@ class TestMainWindowSmoke(GuiTestCase):
         self.assertIs(self.window.detail._current, memo)
         self.assertEqual(self.window._selected_id, memo.id)
 
+    def test_expanding_detail_keeps_list_column_width(self):
+        """双击展开详情：列表列宽不变，分隔条显示，详情只占新增宽度。"""
+        window = self.window
+        window.root.deiconify()
+        window.root.geometry("%dx%d+50+50" % (theme.WIN_LIST_W, theme.WIN_H))
+        window.root.update()
+        self.assertFalse(window.splitter.winfo_ismapped())
+        before = window.body.grid_bbox(0, 0)[2]
+        self.assertEqual(before, theme.LIST_W)
+
+        memo = self.store.create_memo(title="宽度测试")
+        self.store.add(memo)
+        window.show_detail(memo)
+        window.root.update()
+        self.assertTrue(window.splitter.winfo_ismapped())
+        self.assertEqual(window.body.grid_bbox(0, 0)[2], before)
+        self.assertEqual(window._list_w, theme.LIST_W)
+
+    def test_splitter_drag_changes_ratio_and_clamps(self):
+        """按住分隔条左右拖动可调整两侧占比，且不会越过最小宽度。"""
+        window = self.window
+        memo = self.store.create_memo(title="分隔条测试")
+        self.store.add(memo)
+        window.root.deiconify()
+        window.show_detail(memo)
+        window.root.update()
+
+        # 用足够宽的主体模拟大屏，验证按位移调整两侧占比
+        with mock.patch.object(window.body, "winfo_width", return_value=1400):
+            window._start_split_drag(SimpleNamespace(x_root=500))
+            window._on_split_drag(SimpleNamespace(x_root=620))
+            self.assertEqual(window._list_w, theme.LIST_W + 120)
+            window._on_split_drag(SimpleNamespace(x_root=-5000))
+            self.assertEqual(window._list_w, theme.MIN_LIST_W)
+
+        # 小屏上窗口被钳窄时，向右拖也不能把列表压得比默认还小
+        window._start_split_drag(SimpleNamespace(x_root=500))
+        window._on_split_drag(SimpleNamespace(x_root=2000))
+        self.assertGreaterEqual(window._list_w, theme.LIST_W)
+
+        window.close_detail()
+        self.assertFalse(window.splitter.winfo_ismapped())
+        self.assertEqual(window._list_w, theme.LIST_W)
+
     def test_single_click_selects_row(self):
         memo = self.store.create_memo(title="click me")
         self.store.add(memo)
@@ -565,13 +609,19 @@ class TestDetailPanelSmoke(GuiTestCase):
     def test_side_controls_are_in_the_right_column(self):
         detail = self.window.detail
         # 属性条在「任务详情」标题行的右侧（head 内，pack side=left+expand），
-        # 四个属性一字排开：下拉框/步进框直接挂在 side 上，
-        # 日历按钮与 % 标签在各自的 cell 里（side 的孙控件）。
+        # 只保留紧急程度 / 状态 / 进度三个属性；预期完成时间已移到
+        # 创建时间下方那一行，以 "to" 开头，和日期框同属一个 due_row。
         self.assertIs(detail.side.master, detail.head)
         self.assertIs(detail.cmb_urgency.master, detail.side)
         self.assertIs(detail.cmb_status.master, detail.side)
         self.assertIs(detail.spin_progress.master.master, detail.side)
-        self.assertIs(detail.btn_due.master.master, detail.side)
+        self.assertIs(detail.btn_due.master, detail.entry_due.master)
+        self.assertNotIn("预期完成时间", [
+            child.cget("text") for child in detail.side.winfo_children()
+            if isinstance(child, tk.Label)])
+        self.assertIn("to", [
+            child.cget("text") for child in detail.btn_due.master.winfo_children()
+            if isinstance(child, tk.Label)])
         self.assertEqual(detail.side.pack_info()["side"], "left")
         self.assertEqual(int(detail.side.pack_info()["expand"]), 1)
 
