@@ -82,6 +82,53 @@ def parse_due_text(text: str) -> Tuple[date, str]:
     return parsed.date(), clock
 
 
+def display_time_text(text: str) -> str:
+    """把完整 due 文本中的时间取成 HH:MM（如 15:30），无时间则返回空串。"""
+    _, clock = parse_due_text(text)
+    return clock[:5]
+
+
+def split_due_text(text: str) -> Tuple[str, str]:
+    """拆成 (YYYY-MM-DD, HH:MM) 两个展示字段；时间不含秒。"""
+    day, clock = parse_due_text(text)
+    return day.strftime("%Y-%m-%d"), clock[:5]
+
+
+def join_due_text(date_text: str, time_text: str) -> str:
+    """把日期字段与 HH:MM 时间字段合成可被 models 解析的完整文本。"""
+    prefix = (date_text or "").strip()
+    if not prefix:
+        return ""
+    clock = normalize_time_text(time_text)
+    return prefix + (" " + clock if clock else "")
+
+
+def place_near_host(
+    anchor: Tuple[int, int, int, int],
+    popup_size: Tuple[int, int],
+    host: Tuple[int, int, int, int],
+    gap: int = 6,
+    edge: int = 8,
+) -> Tuple[int, int]:
+    """计算弹窗位置：贴近触发控件，并始终落在主窗口所在显示器的一侧。
+
+    ``anchor`` / ``host`` 均为 ``(x, y, width, height)`` 屏幕坐标。
+    先放在锚点下方，右侧或下方越界时翻到锚点左侧 / 上方，再夹进主窗口范围内；
+    这样多屏环境下窗口在副屏时，弹窗不会跑到主屏去找。
+    """
+    ax, ay, aw, ah = [int(v) for v in anchor]
+    pw, ph = [int(v) for v in popup_size]
+    hx, hy, hw, hh = [int(v) for v in host]
+    x, y = ax, ay + ah + gap
+    if x + pw > hx + hw - edge:
+        x = ax + aw - pw
+    if y + ph > hy + hh - edge:
+        y = ay - ph - gap
+    x = max(hx + edge, min(x, hx + hw - pw - edge))
+    y = max(hy + edge, min(y, hy + hh - ph - edge))
+    return max(0, x), max(0, y)
+
+
 # ---------------------------------------------------------------------------
 # 月历弹窗
 # ---------------------------------------------------------------------------
@@ -98,12 +145,16 @@ class CalendarPopup(tk.Toplevel):
         initial_text: str = "",
         on_pick: Optional[Callable[[str], None]] = None,
         on_clear: Optional[Callable[[], None]] = None,
+        anchor: Any = None,
+        host: Any = None,
     ):
         super().__init__(master, bg=theme.CARD_BG)
         self.title("选择预期完成时间")
         self.resizable(False, False)
         self._on_pick = on_pick
         self._on_clear = on_clear
+        self._anchor = anchor
+        self._host = host
         self._today = datetime.now().date()
         self._year, self._month, self.var_time = self._initial_state(initial_text)
         self.var_month = tk.StringVar(value="")
@@ -184,21 +235,26 @@ class CalendarPopup(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self._close)
 
     def _prepare_window(self, master: Any) -> None:
-        """定位到触发控件附近并尝试模态；隐藏/无显示环境下安全降级。"""
+        """贴近「日历」按钮定位，并夹在主窗口范围内（多屏不会跑偏）。"""
+        host_widget = self._host or master.winfo_toplevel()
+        anchor_widget = self._anchor or master
         try:
-            self.transient(master.winfo_toplevel())
+            self.transient(host_widget.winfo_toplevel())
         except tk.TclError:
             pass
         try:
             self.update_idletasks()
             width = self.winfo_width() or 320
             height = self.winfo_height() or 300
-            sw = self.winfo_screenwidth()
-            sh = self.winfo_screenheight()
-            x = max(0, min(master.winfo_rootx() + 20, sw - width - 10))
-            y = max(0, min(master.winfo_rooty() + 40, sh - height - 10))
+
+            def geom(widget: Any) -> Tuple[int, int, int, int]:
+                return (widget.winfo_rootx(), widget.winfo_rooty(),
+                        widget.winfo_width() or 1, widget.winfo_height() or 1)
+
+            x, y = place_near_host(
+                geom(anchor_widget), (width, height), geom(host_widget))
             self.geometry("+%d+%d" % (x, y))
-        except tk.TclError:
+        except (tk.TclError, ValueError):
             pass
         try:
             self.grab_set()

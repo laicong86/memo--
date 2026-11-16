@@ -35,6 +35,7 @@ from config import (
     COLOR_PRESETS,
     DEFAULT_COLOR_MAP,
     DEFAULT_DUE_SOON_HOURS,
+    DEFAULT_UNLOCK_DUE_HOURS,
     DEFAULT_HOTKEY,
     DEFAULT_NEW_HOTKEY,
     color_for_memo,
@@ -989,7 +990,7 @@ class MainWindow(object):
         window = tk.Toplevel(self.root)
         window.title("设置")
         window.configure(bg=theme.CARD_BG)
-        window.geometry("520x560")
+        window.geometry("520x600")
         window.resizable(False, False)
         try:
             window.attributes("-topmost", True)
@@ -1045,15 +1046,24 @@ class MainWindow(object):
                    font=theme.FONT_LABEL, bg=theme.INPUT_BG, fg=theme.TEXT_DARK,
                    relief="flat").grid(row=0, column=1, sticky="w", pady=4)
 
+        tk.Label(options, text="解锁提醒提前(小时)", font=theme.FONT_LABEL,
+                 bg=theme.CARD_BG, fg=theme.TEXT_DARK, width=18,
+                 anchor="w").grid(row=1, column=0, sticky="w", pady=4)
+        unlock_hours_var = tk.IntVar(value=self.config.unlock_due_hours)
+        tk.Spinbox(options, from_=1, to=8760, textvariable=unlock_hours_var,
+                   width=10, font=theme.FONT_LABEL, bg=theme.INPUT_BG,
+                   fg=theme.TEXT_DARK, relief="flat").grid(
+            row=1, column=1, sticky="w", pady=4)
+
         tk.Label(options, text="默认排序", font=theme.FONT_LABEL,
                  bg=theme.CARD_BG, fg=theme.TEXT_DARK, width=14,
-                 anchor="w").grid(row=1, column=0, sticky="w", pady=4)
+                 anchor="w").grid(row=2, column=0, sticky="w", pady=4)
         sort_var = tk.StringVar(value=SORT_MODE_LABELS.get(self.config.sort_mode,
                                                            SORT_MODES[0][1]))
         ttk.Combobox(options, textvariable=sort_var, state="readonly", width=16,
                      font=theme.FONT_LABEL,
                      values=[label for _, label in SORT_MODES]).grid(
-            row=1, column=1, sticky="w", pady=4)
+            row=2, column=1, sticky="w", pady=4)
 
         # ---------------- 快捷键 ----------------
         hotkey_frame = tk.LabelFrame(window, text="快捷键",
@@ -1160,13 +1170,13 @@ class MainWindow(object):
                   cursor="hand2", width=10,
                   command=lambda: self._save_settings(
                       window, color_vars, hours_var, sort_var,
-                      hotkey_var, new_hotkey_var)).pack(side="left")
+                      hotkey_var, new_hotkey_var, unlock_hours_var)).pack(side="left")
         tk.Button(buttons, text="恢复默认", font=theme.FONT_LABEL,
                   bg=theme.HEADER_BG, fg=theme.TEXT_DARK, relief="flat",
                   cursor="hand2", width=9,
                   command=lambda: self._reset_settings(
                       color_vars, previews, hours_var, sort_var,
-                      hotkey_var, new_hotkey_var)).pack(
+                      hotkey_var, new_hotkey_var, unlock_hours_var)).pack(
             side="left", padx=8)
         tk.Button(buttons, text="退出程序", font=theme.FONT_LABEL,
                   bg=theme.HEADER_BG, fg=theme.DANGER, relief="flat",
@@ -1191,7 +1201,8 @@ class MainWindow(object):
     def _save_settings(self, window: Any, color_vars: Dict[str, tk.StringVar],
                        hours_var: Any, sort_var: Any,
                        hotkey_var: Any = None,
-                       new_hotkey_var: Any = None) -> None:
+                       new_hotkey_var: Any = None,
+                       unlock_hours_var: Any = None) -> None:
         """校验并保存设置，立即刷新列表颜色与全局热键。"""
         for key in COLOR_KEYS:
             raw = color_vars[key].get().strip()
@@ -1206,6 +1217,12 @@ class MainWindow(object):
             self.config.due_soon_hours = max(1, min(8760, int(hours_var.get())))
         except (tk.TclError, ValueError):
             self.config.due_soon_hours = DEFAULT_DUE_SOON_HOURS
+        if unlock_hours_var is not None:
+            try:
+                self.config.unlock_due_hours = max(
+                    1, min(8760, int(unlock_hours_var.get())))
+            except (tk.TclError, ValueError):
+                self.config.unlock_due_hours = DEFAULT_UNLOCK_DUE_HOURS
         self.config.sort_mode = LABEL_TO_SORT.get(sort_var.get(), SORT_CREATED)
         self._sort_mode = self.config.sort_mode
         try:
@@ -1260,7 +1277,8 @@ class MainWindow(object):
     def _reset_settings(self, color_vars: Dict[str, tk.StringVar],
                         previews: Dict[str, tk.Label], hours_var: Any,
                         sort_var: Any, hotkey_var: Any = None,
-                        new_hotkey_var: Any = None) -> None:
+                        new_hotkey_var: Any = None,
+                        unlock_hours_var: Any = None) -> None:
         """把设置窗口表单恢复为默认值（不立即写盘，需点击保存）。"""
         for key in COLOR_KEYS:
             color_vars[key].set(DEFAULT_COLOR_MAP[key])
@@ -1269,6 +1287,8 @@ class MainWindow(object):
             except tk.TclError:
                 pass
         hours_var.set(DEFAULT_DUE_SOON_HOURS)
+        if unlock_hours_var is not None:
+            unlock_hours_var.set(DEFAULT_UNLOCK_DUE_HOURS)
         sort_var.set(SORT_MODES[0][1])
         if hotkey_var is not None:
             hotkey_var.set(DEFAULT_HOTKEY)

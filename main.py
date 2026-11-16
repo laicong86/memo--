@@ -19,9 +19,11 @@ from __future__ import annotations
 import os
 import sys
 import tkinter as tk
-from typing import Any, Callable, Tuple
+from datetime import datetime, timedelta
+from typing import Any, Callable, List, Tuple
 
 from config import AppConfig
+from models import STATUS_DONE, parse_time
 from single_instance import SingleInstanceGuard
 from storage import MemoStore
 from tray import IS_WINDOWS as TRAY_PLATFORM_OK
@@ -29,6 +31,56 @@ from tray import TrayIcon
 from ui_main import MainWindow
 
 APP_NAME = "PyMemoTool"
+UNLOCK_LIST_LIMIT = 3  # 气泡里最多列几条临期任务，避免通知过长被折叠
+
+
+def upcoming_due_memos(
+    memos: List[Any],
+    hours: int,
+    now: datetime = None,
+) -> List[Tuple[Any, datetime]]:
+    """挑出未完成、且在未来 ``hours`` 小时内到期的事务（按到期时间升序）。
+
+    使用本机 ``datetime.now()``；时间不可解析或未设置的事务不参与。
+    """
+    current = now or datetime.now()
+    limit = current + timedelta(hours=max(0, int(hours)))
+    items = []  # type: List[Tuple[Any, datetime]]
+    for memo in memos:
+        if memo.status == STATUS_DONE:
+            continue
+        due = parse_time(memo.due_at or "")
+        if due is None or not (current <= due <= limit):
+            continue
+        items.append((memo, due))
+    items.sort(key=lambda pair: pair[1])
+    return items
+
+
+def _due_countdown(due: datetime, now: datetime) -> str:
+    """把剩余时间写成简短中文标签，如「15:30」「2小时后」「3天后」。"""
+    minutes = int((due - now).total_seconds() // 60)
+    if minutes < 60:
+        return "%d分钟后" % max(1, minutes)
+    hours = minutes / 60.0
+    if hours < 24:
+        return "%.1f小时后" % hours
+    return "%d天后" % (minutes // 1440)
+
+
+def format_unlock_reminder(pending: int, items: List[Tuple[Any, datetime]],
+                           hours: int, now: datetime) -> str:
+    """解锁提醒文案：未完成任务数 + 指定时间窗口内即将到期的事务。"""
+    text = "还有 %d 条未完成事务" % pending
+    if not items:
+        return text
+    parts = []
+    for memo, due in items[:UNLOCK_LIST_LIMIT]:
+        title = (memo.title or "无标题")[:10]
+        parts.append("%s(%s)" % (title, _due_countdown(due, now)))
+    if len(items) > UNLOCK_LIST_LIMIT:
+        parts.append("等%d条" % len(items))
+    return "%s；%d小时内到期：%s" % (text, hours, "、".join(parts))
 
 
 def app_base_dir() -> str:
@@ -170,11 +222,14 @@ class MemoApp(object):
             self.window.show()
 
     def on_unlock(self) -> None:
-        """每次解锁屏幕：统计未完成事务数并用托盘气泡提示。"""
+        """每次解锁屏幕：提示未完成数，并列出即将到期的事务。"""
         if self._exiting:
             return
         pending = self.store.count_pending()
-        text = "还有 %d 条未完成事务" % pending
+        now = datetime.now()
+        hours = self.config.unlock_due_hours
+        items = upcoming_due_memos(self.store.list_all(), hours, now)
+        text = format_unlock_reminder(pending, items, hours, now)
         self.tray.notify("备忘录 · 解锁提醒", text)
         self.window.set_status_hint(text)
         self.window.refresh()

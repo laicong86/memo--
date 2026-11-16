@@ -24,7 +24,11 @@ from tkinter import messagebox, ttk
 from typing import Any, Callable, List, Optional, Tuple
 
 import theme
-from calendar_picker import CalendarPopup
+from calendar_picker import (
+    CalendarPopup,
+    join_due_text,
+    split_due_text,
+)
 from models import (
     Memo,
     ProgressLog,
@@ -115,7 +119,9 @@ class DetailPanel(tk.Frame):
 
         # 表单变量（保持变量名不变，供主窗口与回归测试使用）
         self.var_title = tk.StringVar(value="")
-        self.var_due = tk.StringVar(value="")
+        self.var_due = tk.StringVar(value="")  # 完整时间戳（数据层唯一真值）
+        self.var_due_date = tk.StringVar(value="")  # YYYY-MM-DD 展示字段
+        self.var_due_time = tk.StringVar(value="")  # HH:MM 展示字段（如 15:30）
         self.var_urgency = tk.StringVar(value=URGENCY_LEVELS[1])
         self.var_status = tk.StringVar(value=STATUS_LEVELS[0])
         self.var_progress = tk.IntVar(value=0)
@@ -125,6 +131,9 @@ class DetailPanel(tk.Frame):
         for variable in (self.var_title, self.var_due, self.var_urgency,
                          self.var_status, self.var_progress):
             variable.trace_add("write", self._on_field_changed)
+        # 日期 / 时间字段改动 → 合成完整 due → 由 var_due 的 trace 触发保存
+        for variable in (self.var_due_date, self.var_due_time):
+            variable.trace_add("write", self._on_due_part_changed)
 
         self._build_main(main)
         self._build_side(side)
@@ -188,19 +197,30 @@ class DetailPanel(tk.Frame):
         due_cell = tk.Frame(side, bg=theme.CARD_BG)
         due_cell.grid(row=1, column=1, sticky="w", padx=(0, 10))
         due_cell.columnconfigure(0, weight=1)
-        self.entry_due = tk.Entry(due_cell, textvariable=self.var_due,
-                                  width=13,
+        self.entry_due = tk.Entry(due_cell, textvariable=self.var_due_date,
+                                  width=11,
                                   font=theme.FONT_TINY_PLAIN, bg=theme.INPUT_BG,
                                   fg=theme.TEXT_DARK, relief="flat",
                                   highlightthickness=1,
                                   highlightbackground=theme.INPUT_BORDER,
                                   highlightcolor=theme.ACCENT)
         self.entry_due.grid(row=0, column=0, sticky="ew")
+        # 时间单独一格，只填具体时间（如 15:30），无需写完整时间戳
+        tk.Label(due_cell, text=":", font=theme.FONT_TINY_PLAIN,
+                 bg=theme.CARD_BG, fg=theme.TEXT_MUTED).grid(row=0, column=1)
+        self.entry_due_time = tk.Entry(due_cell, textvariable=self.var_due_time,
+                                       width=6,
+                                       font=theme.FONT_TINY_PLAIN,
+                                       bg=theme.INPUT_BG, fg=theme.TEXT_DARK,
+                                       relief="flat", highlightthickness=1,
+                                       highlightbackground=theme.INPUT_BORDER,
+                                       highlightcolor=theme.ACCENT)
+        self.entry_due_time.grid(row=0, column=2, padx=(2, 0))
         self.btn_due = tk.Button(due_cell, text="日历", width=4,
                                  font=theme.FONT_TINY_PLAIN, bg=theme.ACCENT,
                                  fg=theme.TEXT_LIGHT, relief="flat",
                                  cursor="hand2", command=self._open_calendar)
-        self.btn_due.grid(row=0, column=1, padx=(3, 0))
+        self.btn_due.grid(row=0, column=3, padx=(3, 0))
 
         self._side_label(side, "紧急程度", 2)
         self.cmb_urgency = ttk.Combobox(side, textvariable=self.var_urgency,
@@ -259,7 +279,7 @@ class DetailPanel(tk.Frame):
             self._current = memo
             self._logs = [ProgressLog(text=log.text, time=log.time) for log in memo.logs]
             self.var_title.set(memo.title)
-            self.var_due.set(memo.due_at)
+            self._set_due_text(memo.due_at)
             self.var_urgency.set(
                 memo.urgency if memo.urgency in URGENCY_LEVELS else URGENCY_LEVELS[1])
             self.var_status.set(
@@ -384,8 +404,28 @@ class DetailPanel(tk.Frame):
     # ------------------------------------------------------------------
     # 日历选择
     # ------------------------------------------------------------------
+    def _set_due_text(self, text: str) -> None:
+        """同步完整 due 与日期 / HH:MM 两个展示字段（不触发自动保存）。"""
+        was_suspended = self._suspend
+        self._suspend = True
+        try:
+            self.var_due.set(text or "")
+            day, clock = split_due_text(text or "")
+            self.var_due_date.set(day)
+            self.var_due_time.set(clock)
+        finally:
+            self._suspend = was_suspended
+
+    def _on_due_part_changed(self, *args: Any) -> None:
+        """日期或时间框改动 → 合成完整 due 文本，交由 var_due 触发保存。"""
+        if self._suspend:
+            return
+        joined = join_due_text(self.var_due_date.get(), self.var_due_time.get())
+        if joined != self.var_due.get():
+            self.var_due.set(joined)
+
     def _open_calendar(self) -> None:
-        """点击「日历」按钮弹出月历。"""
+        """点击「日历」按钮：在按钮旁、主窗口范围内弹出月历。"""
         self._close_calendar()
         try:
             self._calendar = CalendarPopup(
@@ -393,18 +433,22 @@ class DetailPanel(tk.Frame):
                 initial_text=self.var_due.get(),
                 on_pick=self._on_date_picked,
                 on_clear=self._on_date_cleared,
+                anchor=self.btn_due,
+                host=self.winfo_toplevel(),
             )
         except tk.TclError:
             self._calendar = None
 
     def _on_date_picked(self, text: str) -> None:
-        """月历选中日期后写回预期完成时间。"""
-        self.var_due.set(text)
+        """月历选中日期后写回预期完成时间（时间框保持 HH:MM）。"""
+        self._set_due_text(text)
+        self._on_field_changed()
         self._calendar = None
 
     def _on_date_cleared(self) -> None:
         """月历点「清除」：留空表示未设置。"""
-        self.var_due.set("")
+        self._set_due_text("")
+        self._on_field_changed()
         self._calendar = None
 
     def _close_calendar(self) -> None:

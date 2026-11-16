@@ -19,5 +19,4 @@ Windows 桌面托盘备忘录工具。基于 Python 3.9 标准库开发，单文
 
 ## 校验
 
-- 文件大小：8,398,998 字节
-- SHA-256：`a07738fa9fd86adf35d2539f5237b1da2ddbcf086062ace86116fc1b81376f09`
+发布资产的 SHA-256 可在下载后本地计算；仓库 `release/MemoTool.exe` 与 Release 附件为同一文件。

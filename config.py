@@ -76,6 +76,7 @@ COLOR_PRESETS = (
 )
 
 DEFAULT_DUE_SOON_HOURS = 48
+DEFAULT_UNLOCK_DUE_HOURS = 24  # 解锁提醒：列出未来 24 小时内将到期的事务
 DEFAULT_SORT_MODE = SORT_CREATED
 DEFAULT_HOTKEY = "F2"  # 全局快捷键：弹出 / 最小化主窗口
 DEFAULT_NEW_HOTKEY = "Ctrl+Alt+N"  # 全局快捷键：快速新建事务
@@ -133,6 +134,7 @@ class AppConfig(object):
         self,
         color_map: Optional[Dict[str, str]] = None,
         due_soon_hours: int = DEFAULT_DUE_SOON_HOURS,
+        unlock_due_hours: int = DEFAULT_UNLOCK_DUE_HOURS,
         sort_mode: str = DEFAULT_SORT_MODE,
         hotkey: str = DEFAULT_HOTKEY,
         new_hotkey: str = DEFAULT_NEW_HOTKEY,
@@ -141,6 +143,8 @@ class AppConfig(object):
         self.path = path or ""
         self.color_map = dict(DEFAULT_COLOR_MAP)
         self.due_soon_hours = _safe_hours(due_soon_hours)
+        self.unlock_due_hours = _safe_hours(unlock_due_hours,
+                                            DEFAULT_UNLOCK_DUE_HOURS)
         # 非字符串（含不可哈希类型）一律回退，避免 dict 成员判断抛 TypeError
         self.sort_mode = (
             sort_mode
@@ -194,6 +198,9 @@ class AppConfig(object):
             self.apply_colors(color_map)
         if "due_soon_hours" in data:
             self.due_soon_hours = _safe_hours(data.get("due_soon_hours"), self.due_soon_hours)
+        if "unlock_due_hours" in data:
+            self.unlock_due_hours = _safe_hours(
+                data.get("unlock_due_hours"), self.unlock_due_hours)
         mode = data.get("sort_mode")
         # 先做类型判定，避免 list/dict 等不可哈希值参与 dict 成员判断
         if isinstance(mode, str) and mode in SORT_MODE_LABELS:
@@ -216,6 +223,7 @@ class AppConfig(object):
             "version": CONFIG_VERSION,
             "color_map": dict(self.color_map),
             "due_soon_hours": self.due_soon_hours,
+            "unlock_due_hours": self.unlock_due_hours,
             "sort_mode": self.sort_mode,
             "hotkey": self.hotkey,
             "new_hotkey": self.new_hotkey,
