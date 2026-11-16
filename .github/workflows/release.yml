@@ -1,4 +1,4 @@
-name: Build and publish release
+name: Publish release
 
 on:
   push:
@@ -9,41 +9,23 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: windows-latest
+  publish:
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.9
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.9"
-          architecture: x64
-
-      - name: Install build tools
-        run: python -m pip install --upgrade pip pyinstaller
-
-      # 云端 runner 的字体/DPI/会话与本机不同，GUI 用例可能失败；
-      # 发布以本机已验证的构建为准，这里仅作记录，不阻断打包与发布。
-      - name: Run tests
-        continue-on-error: true
-        run: python -m unittest discover -s tests
-
-      - name: Build exe
-        run: python build.py
-
-      - name: Verify artifact
-        shell: bash
-        run: test -s dist/MemoTool.exe
+      # 发布资产是本机已通过全部回归测试并用 PyInstaller 构建的 exe，
+      # 保存在 release/ 目录；云端只负责建 Release 与上传，不再重复构建。
+      - name: Verify asset
+        run: test -s release/MemoTool.exe
 
       - name: Create GitHub Release
-        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "${GITHUB_REF_NAME}" \
-            dist/MemoTool.exe \
+            release/MemoTool.exe \
             --title "MemoTool ${GITHUB_REF_NAME}" \
             --generate-notes \
             --verify-tag
