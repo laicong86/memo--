@@ -172,13 +172,23 @@ class TestRequirementEvidence(unittest.TestCase):
         self.assertIn('"还有 %d 条未完成事务" % pending', source)
         self.assertIn('self.tray.notify("备忘录 · 解锁提醒", text)', source)
 
-    def test_req3_starts_hidden_in_tray_before_mainloop(self):
+    def test_req3_starts_visible_and_tray_ready_before_mainloop(self):
         source = _read("main.py")
-        self.assertIn("self.window.hide_to_tray()", source)
-        self.assertLess(source.index("self.window.hide_to_tray()"),
+        self.assertIn("self.window.show()", source)
+        self.assertLess(source.index("self.window.show()"),
                         source.index("self.root.mainloop()"))
         self.assertIn("self.tray.start()", source)
-        self.assertEqual(_read("ui_main.py").count("hide_to_tray"), 3)
+        ui_source = _read("ui_main.py")
+        self.assertIn("def hide_to_tray", ui_source)
+        self.assertIn("self.root.withdraw()", ui_source)
+        self.assertIn("on_hide_to_tray", ui_source)
+
+    def test_first_hide_notifies_hotkey_from_config(self):
+        source = _read("main.py")
+        self.assertIn("def on_hide_to_tray", source)
+        self.assertIn("self._hide_hint_shown", source)
+        self.assertIn("self.config.hotkey", source)
+        self.assertIn("on_hide_to_tray=self.on_hide_to_tray", source)
 
     def test_req3_color_mapping_is_user_configurable(self):
         config_source = _read("config.py")

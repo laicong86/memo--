@@ -9,7 +9,8 @@
 打包：
     build.bat   或   py -3.9 build.py
 
-启动后默认最小化到右下角系统托盘；关闭窗口按钮只隐藏不退出。
+启动后直接显示主窗口，右下角系统托盘常驻；关闭/最小化按钮只隐藏不退出。
+第一次最小化到托盘时，弹气泡告知可用「设置 → 快捷键」里的键（默认 F2）唤出。
 每次解锁屏幕时弹出托盘气泡「还有 N 条未完成事务」。
 全局快捷键（默认 F2，可在「设置 → 快捷键」修改）：弹出 / 最小化主窗口。
 重复启动（如再次双击 exe）不会开第二个实例，而是把已运行的窗口唤起到前台。
@@ -153,11 +154,13 @@ class MemoApp(object):
             self.config,
             self.config_path,
             on_request_exit=self.request_exit,
+            on_hide_to_tray=self.on_hide_to_tray,
         )
         # 设置窗口保存快捷键后，立即应用到托盘热键（呼出 / 新建 两个）
         self.window._hotkey_applier = self.apply_hotkey
         self.window._new_hotkey_applier = self.apply_new_hotkey
         self._exiting = False
+        self._hide_hint_shown = False  # 首次最小化托盘提示只弹一次
         self.tray = TrayIcon(
             on_show=self.show_window,
             on_new=self.new_from_tray,
@@ -221,6 +224,18 @@ class MemoApp(object):
         else:
             self.window.show()
 
+    def on_hide_to_tray(self) -> None:
+        """首次最小化到托盘：提示如何唤出，快捷键实时读取当前设置。"""
+        if self._exiting or self._hide_hint_shown:
+            return
+        self._hide_hint_shown = True
+        # 实时读取：设置里改过快捷键后，这里拿到的就是最新值
+        hotkey = self.config.hotkey or "F2"
+        self.tray.notify(
+            "备忘录工具",
+            "已最小化到系统托盘，按 %s 可重新打开（可在设置中修改快捷键）" % hotkey,
+        )
+
     def on_unlock(self) -> None:
         """每次解锁屏幕：提示未完成数，并列出即将到期的事务。"""
         if self._exiting:
@@ -275,26 +290,11 @@ class MemoApp(object):
     # 生命周期
     # ------------------------------------------------------------------
     def run(self) -> int:
-        """启动应用：默认最小化到托盘，进入 tkinter 主循环。"""
-        self.window.hide_to_tray()
+        """启动应用：直接显示主窗口，托盘常驻，进入 tkinter 主循环。"""
+        self.window.show()
 
-        tray_started = False
         if TRAY_PLATFORM_OK:
-            tray_started = self.tray.start()
-
-        if not tray_started:
-            # 非 Windows 或托盘不可用时降级为普通窗口模式，避免程序不可见
-            self.window.show()
-        else:
-            # 启动气泡：便于确认托盘已就绪（解锁时仍会再次提示）
-            self.root.after(
-                1200,
-                lambda: self.tray.notify(
-                    "备忘录工具",
-                    "已最小化到系统托盘，还有 %d 条未完成事务" %
-                    self.store.count_pending(),
-                ),
-            )
+            self.tray.start()
 
         try:
             self.root.mainloop()

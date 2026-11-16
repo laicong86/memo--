@@ -135,12 +135,14 @@ class MainWindow(object):
         config: AppConfig,
         config_path: str,
         on_request_exit: Any = None,
+        on_hide_to_tray: Any = None,
     ):
         self.root = root
         self.store = store
         self.config = config
         self.config_path = config_path
         self._on_request_exit = on_request_exit
+        self._on_hide_to_tray = on_hide_to_tray
 
         self._keyword = ""
         self._sort_mode = config.sort_mode if config.sort_mode in SORT_MODE_LABELS else SORT_CREATED
@@ -747,11 +749,13 @@ class MainWindow(object):
             pass
 
     def hide_to_tray(self) -> None:
-        """隐藏窗口到系统托盘（不退出程序）。"""
+        """隐藏窗口到系统托盘（不退出程序），并通知应用层给用户提示。"""
         try:
             self.root.withdraw()
         except tk.TclError:
             pass
+        if self._on_hide_to_tray is not None:
+            self._on_hide_to_tray()
 
     def _set_window_width(self, width: int) -> None:
         """展开 / 收起详情面板时调整窗口宽度，并保证不贴屏幕边缘。

@@ -887,13 +887,39 @@ class TestUnlockReminder(unittest.TestCase):
             self.app.on_unlock()
         self.assertEqual(notify.call_args[0][1], "还有 0 条未完成事务")
 
-    def test_run_hides_window_before_entering_mainloop(self):
+    def test_run_shows_window_before_entering_mainloop(self):
         with mock.patch.object(self.app.window, "hide_to_tray") as hide, \
              mock.patch.object(self.app.tray, "start", return_value=False), \
              mock.patch.object(self.app.root, "mainloop", return_value=None), \
-             mock.patch.object(self.app.window, "show"):
+             mock.patch.object(self.app.window, "show") as show:
             self.app.run()
-        hide.assert_called_once()
+        show.assert_called_once()
+        hide.assert_not_called()
+
+    def test_first_hide_to_tray_notifies_current_hotkey_once(self):
+        self.app.config.hotkey = "F4"
+        calls = []
+        self.app.tray.notify = lambda title, message: calls.append((title, message))
+        self.app.window.hide_to_tray()
+        self.app.window.hide_to_tray()
+        self.assertEqual(len(calls), 1)
+        self.assertIn("F4", calls[0][1])
+        self.assertNotIn("F2", calls[0][1])
+        self.assertIn("已最小化到系统托盘", calls[0][1])
+
+    def test_hide_to_tray_reads_hotkey_live(self):
+        calls = []
+        self.app.tray.notify = lambda title, message: calls.append((title, message))
+        self.app.config.hotkey = "Ctrl+Alt+M"
+        self.app.on_hide_to_tray()
+        self.assertEqual(len(calls), 1)
+        self.assertIn("Ctrl+Alt+M", calls[0][1])
+
+    def test_main_window_hide_calls_injected_hook(self):
+        fired = []
+        self.app.window._on_hide_to_tray = lambda: fired.append(1)
+        self.app.window.hide_to_tray()
+        self.assertEqual(fired, [1])
 
     def test_runtime_files_stay_in_temp_data_dir(self):
         self.assertIn(_DATA_TMP.name, self.app.memos_path)
