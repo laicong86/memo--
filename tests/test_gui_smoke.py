@@ -180,23 +180,42 @@ class TestMainWindowSmoke(GuiTestCase):
         self.assertIs(self.window.detail._current, memo)
         self.assertEqual(self.window._selected_id, memo.id)
 
-    def test_expanding_detail_keeps_list_column_width(self):
-        """双击展开详情：列表列宽不变，分隔条显示，详情只占新增宽度。"""
+    def test_expanding_detail_splits_window_in_half(self):
+        """双击展开详情：窗口不加宽，列表与详情在同一窗口内各占约一半。"""
         window = self.window
         window.root.deiconify()
         window.root.geometry("%dx%d+50+50" % (theme.WIN_LIST_W, theme.WIN_H))
         window.root.update()
         self.assertFalse(window.splitter.winfo_ismapped())
-        before = window.body.grid_bbox(0, 0)[2]
-        self.assertEqual(before, theme.LIST_W)
 
         memo = self.store.create_memo(title="宽度测试")
         self.store.add(memo)
         window.show_detail(memo)
         window.root.update()
         self.assertTrue(window.splitter.winfo_ismapped())
-        self.assertEqual(window.body.grid_bbox(0, 0)[2], before)
-        self.assertEqual(window._list_w, theme.LIST_W)
+        # 默认各半：列表宽约等于 (窗口可用宽 - 分隔条)/2
+        available = theme.WIN_LIST_W - 2 * theme.PAD - theme.SPLIT_W
+        self.assertLess(abs(window._list_w - available // 2), 12)
+        self.assertLess(window._list_w, theme.LIST_W)  # 明显小于原来的满宽
+        # 详情列宽度与列表相当（紧凑各半，而非列表满宽 + 详情 600）
+        detail_w = window.body.grid_bbox(2, 0)[2]
+        self.assertLess(abs(detail_w - window._list_w), 40)
+
+    def test_detail_open_keeps_window_width_unchanged(self):
+        """紧凑布局：展开/收起详情都不改变窗口宽度。"""
+        window = self.window
+        window.root.deiconify()
+        window.root.geometry("%dx%d+50+50" % (theme.WIN_LIST_W, theme.WIN_H))
+        window.root.update()
+        before = window.root.winfo_width()
+        memo = self.store.create_memo(title="窗口宽度不变")
+        self.store.add(memo)
+        window.show_detail(memo)
+        window.root.update()
+        self.assertEqual(window.root.winfo_width(), before)
+        window.close_detail()
+        window.root.update()
+        self.assertEqual(window.root.winfo_width(), before)
 
     def test_splitter_drag_changes_ratio_and_clamps(self):
         """按住分隔条左右拖动可调整两侧占比，且不会越过最小宽度。"""
@@ -207,40 +226,55 @@ class TestMainWindowSmoke(GuiTestCase):
         window.show_detail(memo)
         window.root.update()
 
-        # 用足够宽的主体模拟大屏（需容下 LIST_W+120 拖动后仍有详情最小宽），
-        # 验证按位移调整两侧占比
+        # 足够宽的主体下，按位移调整两侧占比；起点 _list_w 是展开时的各半值
+        start = window._list_w
         with mock.patch.object(window.body, "winfo_width", return_value=1800):
             window._start_split_drag(SimpleNamespace(x_root=500))
             window._on_split_drag(SimpleNamespace(x_root=620))
-            self.assertEqual(window._list_w, theme.LIST_W + 120)
+            self.assertEqual(window._list_w, start + 120)
             window._on_split_drag(SimpleNamespace(x_root=-5000))
             self.assertEqual(window._list_w, theme.MIN_LIST_W)
 
-        # 小屏上窗口被钳窄时，向右拖也不能把列表压得比默认还小
+        # 向右拖到极限：列表最多占「总宽 - 详情最小宽」
         window._start_split_drag(SimpleNamespace(x_root=500))
         window._on_split_drag(SimpleNamespace(x_root=2000))
-        self.assertGreaterEqual(window._list_w, theme.LIST_W)
+        body_w = window.body.winfo_width()
+        max_list = max(theme.MIN_LIST_W, body_w - theme.SPLIT_W - theme.MIN_DETAIL_W)
+        self.assertLessEqual(window._list_w, max_list)
 
-        adjusted = window._list_w
+        # 收起后列表撑满窗口；但用户占比要记下来供重开恢复
+        adjusted = window._user_list_w
+        self.assertIsNotNone(adjusted)
         window.close_detail()
         self.assertFalse(window.splitter.winfo_ismapped())
-        # 收起详情后保留用户调整过的列表宽度，不再重置为默认
-        self.assertEqual(window._list_w, adjusted)
+        self.assertEqual(window._list_w, max(theme.MIN_LIST_W, window.body.winfo_width()))
+        window.show_detail(memo)
+        self.assertEqual(window._list_w, adjusted)  # 重开恢复用户占比
 
-    def test_close_detail_keeps_adjusted_list_width(self):
-        """调整列表宽度后收起/重开详情，宽度都应保留。"""
+    def test_user_adjusted_ratio_restored_on_reopen(self):
+        """用户拖分隔条调过占比后，收起再展开详情要恢复用户调后的占比。"""
         window = self.window
         memo = self.store.create_memo(title="宽度保留")
         self.store.add(memo)
-        target = theme.LIST_W + 140
-        window._apply_list_width(target)
+        window.root.deiconify()
+        window.root.update()
         window.show_detail(memo)
-        self.assertEqual(window._list_w, target)
-        # 展开/收起时列宽配置都应保持调整后的值，不被重置为默认
-        self.assertEqual(window.body.columnconfigure(0)["minsize"], target)
+        window.root.update()
+        # 模拟用户拖动分隔条把列表调宽 120
+        start = window._list_w
+        window._start_split_drag(SimpleNamespace(x_root=500))
+        window._on_split_drag(SimpleNamespace(x_root=620))
+        adjusted = window._list_w
+        self.assertGreater(adjusted, start)
+        self.assertEqual(window._user_list_w, adjusted)
+
+        # 收起：列表撑满窗口（显示层），但用户占比记录仍在
         window.close_detail()
-        self.assertEqual(window._list_w, target)
-        self.assertEqual(window.body.columnconfigure(0)["minsize"], target)
+        self.assertGreater(window._list_w, adjusted)
+        self.assertEqual(window._user_list_w, adjusted)
+        # 重开：恢复用户调整后的列表宽，而不是默认各半
+        window.show_detail(memo)
+        self.assertEqual(window._list_w, adjusted)
 
     def test_single_click_selects_row(self):
         memo = self.store.create_memo(title="click me")
@@ -479,6 +513,29 @@ class TestMainWindowSmoke(GuiTestCase):
         self.assertEqual(window._list_w, expected)
         self.assertLess(window._list_w, theme.LIST_W)  # 列表确实跟着缩小了
         self.assertGreaterEqual(window._list_w, theme.MIN_LIST_W)
+        window._on_canvas_release(event)
+
+    def test_resize_without_detail_follows_window_width(self):
+        """关掉详情后拖右边界：列表宽度必须跟着窗口变（此前只改外框的 bug）。"""
+        window = self.window
+        window.root.deiconify()
+        window.root.geometry("%dx%d+50+50" % (theme.WIN_LIST_W, theme.WIN_H))
+        window.root.update()
+        self.assertFalse(window._detail_open)
+
+        window._resizing = True
+        window._resize_edge = "e"
+        start_w = 1120
+        window._resize_start = (500, 500, start_w, 560)
+        window._resize_anchor = (50, 50)
+        # 窗口加宽 200 → 列表宽也应从满宽加 200
+        event = SimpleNamespace(x_root=700, y_root=500)
+        with mock.patch.object(ui_main, "current_monitor_workarea",
+                               return_value=(0, 0, 1920, 1032)):
+            with mock.patch.object(window.root, "geometry"):
+                window._on_canvas_resize_motion(event)
+        # 精确期望：新窗口宽 = start_w + 200，列表 = 新窗口宽 - 2*PAD
+        self.assertEqual(window._list_w, start_w + 200 - 2 * theme.PAD)
         window._on_canvas_release(event)
 
     def test_resize_corner_scales_both_width_and_height(self):
