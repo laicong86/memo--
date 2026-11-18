@@ -167,6 +167,7 @@ class Memo(object):
         status      状态：未完成 / 已完成
         progress    进度 0-100
         logs        进度记录列表，元素为 {"time": ..., "text": ...}
+        workspace   绑定的工作目录（可选，空字符串表示未绑定）
     """
 
     def __init__(
@@ -180,6 +181,7 @@ class Memo(object):
         status: str = STATUS_PENDING,
         progress: Any = 0,
         logs: Optional[List[Any]] = None,
+        workspace: str = "",
     ):
         self.id = id or uuid.uuid4().hex
         self.title = title or ""
@@ -189,6 +191,8 @@ class Memo(object):
         self.urgency = urgency if urgency in URGENCY_LEVELS else URGENCY_MEDIUM
         self.status = status if status in STATUS_LEVELS else STATUS_PENDING
         self.progress = normalize_progress(progress)
+        # 非字符串（旧数据 / 外部构造）一律降级为空串，保证后续 path 操作安全
+        self.workspace = workspace if isinstance(workspace, str) else ""
         self.logs = []  # type: List[ProgressLog]
         if logs:
             for item in logs:
@@ -209,12 +213,16 @@ class Memo(object):
             "status": self.status,
             "progress": self.progress,
             "logs": [log.to_dict() for log in self.logs],
+            "workspace": self.workspace,
         }
 
     @classmethod
     def from_dict(cls, data: Optional[Dict[str, Any]]) -> "Memo":
         """从字典还原；对缺失或非法字段一律给出安全默认值。"""
         item = data or {}
+        workspace = item.get("workspace", "")
+        if not isinstance(workspace, str):
+            workspace = ""
         return cls(
             id=str(item.get("id", "") or ""),
             title=str(item.get("title", "") or ""),
@@ -225,6 +233,7 @@ class Memo(object):
             status=str(item.get("status", "") or STATUS_PENDING),
             progress=item.get("progress", 0),
             logs=item.get("logs", []) or [],
+            workspace=workspace,
         )
 
     def add_progress(self, text: str, progress: Any = None, time: str = "") -> ProgressLog:

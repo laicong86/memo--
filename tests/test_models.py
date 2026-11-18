@@ -116,7 +116,7 @@ class TestMemoSerialization(unittest.TestCase):
     def test_to_dict_has_exact_key_set(self):
         expected = {
             "id", "title", "content", "created_at", "due_at",
-            "urgency", "status", "progress", "logs",
+            "urgency", "status", "progress", "logs", "workspace",
         }
         self.assertEqual(set(Memo().to_dict().keys()), expected)
 

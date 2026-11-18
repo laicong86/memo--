@@ -3,8 +3,10 @@
 
 双击列表行后在窗口右侧展开，布局分为两栏：
 
-* 顶部标题行：「任务详情」大标题右侧紧跟**属性条**——紧急程度、状态、
-  进度三个属性横向一字排开（标签在上、选择控件在下）。
+* 顶部标题行：「任务详情」大标题右侧紧跟两个小号操作按钮——**快速打开**
+  （在文件资源管理器打开已绑定的工作目录）与**绑定工作空间**（原生目录选择
+  窗口），其后是**属性条**——紧急程度、状态、进度三个属性横向一字排开
+  （标签在上、选择控件在下）。
 * 标题下方：创建时间一行，紧接一行以 `to` 开头的预期完成时间
   （日期框 + 时间框 + 日历按钮），点「日历」弹出月历选择。
 * 下方编辑区：标题、**历史进展（按时间倒序，最近在最前，占满原备注区，
@@ -19,9 +21,12 @@ on_save 回调写盘；收起面板时立即冲刷尚未写入的改动，不再
 """
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 import tkinter as tk
 from datetime import datetime
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 from typing import Any, Callable, List, Optional, Tuple
 
 import theme
@@ -88,10 +93,12 @@ class DetailPanel(tk.Frame):
         self.var_progress = tk.IntVar(value=0)
         self.var_log = tk.StringVar(value="")
         self.var_created = tk.StringVar(value="")
+        self.var_workspace = tk.StringVar(value="")  # 绑定的工作目录
 
         # 任一属性变更 → 防抖自动保存（写入表单时不触发，见 _suspend）
         for variable in (self.var_title, self.var_due, self.var_urgency,
-                         self.var_status, self.var_progress):
+                         self.var_status, self.var_progress,
+                         self.var_workspace):
             variable.trace_add("write", self._on_field_changed)
         # 日期 / 时间字段改动 → 合成完整 due → 由 var_due 的 trace 触发保存
         for variable in (self.var_due_date, self.var_due_time):
@@ -114,11 +121,24 @@ class DetailPanel(tk.Frame):
         tk.Button(head, text="×", width=3, font=theme.FONT_BODY_BOLD,
                   bg=theme.HEADER_BG, fg=theme.TEXT_DARK, relief="flat",
                   cursor="hand2", command=self._click_close).pack(side="right")
+        # 标题旁的两个小号按钮：字体与紧急程度下拉框完全一致。
+        # DPI 感知下实测请求宽度：标题 74 + 快速打开 55 + 绑定工作空间 77
+        # + 属性条最小 199 + 关闭 40 + 间距 ≈ 469 < head 可用宽度 572。
+        self.btn_quick_open = tk.Button(
+            head, text="快速打开", font=theme.FONT_TINY_PLAIN,
+            bg=theme.HEADER_BG, fg=theme.TEXT_DARK, relief="flat",
+            cursor="hand2", command=self._click_quick_open)
+        self.btn_quick_open.pack(side="left", padx=(10, 0))
+        self.btn_bind_workspace = tk.Button(
+            head, text="绑定工作空间", font=theme.FONT_TINY_PLAIN,
+            bg=theme.HEADER_BG, fg=theme.TEXT_DARK, relief="flat",
+            cursor="hand2", command=self._click_bind_workspace)
+        self.btn_bind_workspace.pack(side="left", padx=(4, 0))
         self.head = head
 
-        # 属性条：紧挨「任务详情」大标题右侧，横向一字排开
+        # 属性条：紧挨两个小按钮右侧，横向一字排开
         side = tk.Frame(head, bg=theme.CARD_BG)
-        side.pack(side="left", fill="x", expand=True, padx=(18, 10),
+        side.pack(side="left", fill="x", expand=True, padx=(10, 10),
                   pady=(2, 0))
         self.side = side
 
@@ -291,6 +311,8 @@ class DetailPanel(tk.Frame):
             self.var_progress.set(memo.progress)
             self.var_log.set("")
             self.var_created.set(memo.created_at)
+            bound = getattr(memo, "workspace", "")
+            self.var_workspace.set(bound if isinstance(bound, str) else "")
             self._render_logs()
         finally:
             self._suspend = False
@@ -338,6 +360,7 @@ class DetailPanel(tk.Frame):
             status=self.var_status.get(),
             progress=progress,
             logs=[log.to_dict() for log in self._logs],
+            workspace=self.var_workspace.get().strip(),
         )
 
     # ------------------------------------------------------------------
@@ -525,6 +548,52 @@ class DetailPanel(tk.Frame):
     def _click_save(self) -> None:
         """兼容旧调用：立即保存（界面已移除「保存」按钮）。"""
         self._save_now(warn=True)
+
+    def _click_bind_workspace(self) -> None:
+        """「绑定工作空间」：原生目录选择窗口，取消时保持原值不变。"""
+        try:
+            selected = filedialog.askdirectory(
+                title="选择工作空间目录", parent=self)
+        except tk.TclError:
+            return  # 弹窗被关闭 / 窗口已销毁时静默忽略
+        if not selected:
+            return
+        path = os.path.normpath(selected)
+        if path == self.var_workspace.get():
+            return
+        self.var_workspace.set(path)  # trace → 400ms 防抖自动保存
+
+    def _click_quick_open(self) -> None:
+        """「快速打开」：在文件资源管理器中打开已绑定的工作目录。"""
+        raw = self.var_workspace.get().strip()
+        if not raw:
+            messagebox.showinfo("快速打开", "尚未绑定工作空间。")
+            return
+        path = os.path.normpath(raw)
+        if not os.path.isdir(path):
+            messagebox.showwarning("快速打开", "绑定的目录已不存在：\n%s" % path)
+            return
+        self._reveal_workspace(path)
+
+    @staticmethod
+    def _reveal_workspace(path: str) -> None:
+        """跨平台打开目录：Windows 优先 os.startfile，其余回退系统命令。"""
+        if sys.platform.startswith("win") and hasattr(os, "startfile"):
+            try:
+                os.startfile(path)  # noqa: S606 - 打开的是用户选定目录
+                return
+            except (OSError, AttributeError, ValueError):
+                pass  # 回退到 explorer，避免直接抛给用户
+        opener = "open" if sys.platform == "darwin" else "xdg-open"
+        if sys.platform.startswith("win"):
+            opener = "explorer"
+        try:
+            subprocess.Popen([opener, path])
+        except (OSError, ValueError):
+            try:
+                messagebox.showwarning("快速打开", "无法打开目录：\n%s" % path)
+            except tk.TclError:
+                pass
 
     def _click_delete(self) -> None:
         """删除按钮（二次确认后回调）。"""
