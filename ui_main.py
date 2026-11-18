@@ -40,6 +40,7 @@ from config import (
     DEFAULT_HOTKEY,
     DEFAULT_NEW_HOTKEY,
     DEFAULT_AUTO_START,
+    DEFAULT_ALWAYS_ON_TOP,
     color_for_memo,
     color_key_for_memo,
     is_valid_hex,
@@ -62,6 +63,12 @@ from ui_detail import DetailPanel
 
 LABEL_TO_SORT = {label: key for key, label in SORT_MODES}
 _PRESET_VALUES = ["%s %s" % (hex_value, name) for hex_value, name in COLOR_PRESETS]
+
+# 排序下拉同时承载「排序」与「视图筛选」两类选项。筛选项沿用当前 _sort_mode，
+# 只额外收窄列表，因此排序与筛选正交组合；集中定义避免多处硬编码不一致。
+FILTER_DONE_ONLY_LABEL = "仅显示已完成"
+SORT_VIEW_OPTIONS = ([label for _, label in SORT_MODES]
+                     + [FILTER_DONE_ONLY_LABEL])
 
 
 class _WinRect(ctypes.Structure):
@@ -180,6 +187,8 @@ class MainWindow(object):
         self._build_separator()
         self._build_body()
         self._build_footer()
+        # 启动时应用持久化的「窗口保持最前」（默认 False，旧配置同样安全）
+        self._on_topmost_changed()
         self.refresh()
         self._tick()
 
@@ -328,41 +337,26 @@ class MainWindow(object):
 
         self.cmb_sort = ttk.Combobox(header, state="readonly", width=12,
                                      font=theme.FONT_LABEL,
-                                     values=[label for _, label in SORT_MODES])
+                                     values=list(SORT_VIEW_OPTIONS))
         try:
             self.cmb_sort.current(
-                [key for key, _ in SORT_MODES].index(self._sort_mode)
+                SORT_VIEW_OPTIONS.index(SORT_MODE_LABELS[self._sort_mode])
             )
-        except ValueError:
+        except (ValueError, KeyError):
             self.cmb_sort.current(0)
         self.cmb_sort.pack(side="left", padx=(10, 0), ipady=2)
         self.cmb_sort.bind("<<ComboboxSelected>>", self._on_sort_changed)
 
-        # 仅显示已完成：勾选后列表只列已完成任务
+        # 「仅显示已完成」已并入排序下拉（FILTER_DONE_ONLY_LABEL），顶栏不再
+        # 单独占用勾选框；var_done_only 仍作为 refresh/状态栏的内部筛选状态。
         self.var_done_only = tk.BooleanVar(value=False)
-        self.chk_done_only = tk.Checkbutton(
-            header, text="已完成", variable=self.var_done_only,
-            command=self._on_done_only_changed, font=theme.FONT_LABEL,
-            bg=theme.CARD_BG, fg=theme.TEXT_MUTED, activebackground=theme.CARD_BG,
-            activeforeground=theme.TEXT_DARK, relief="flat",
-            cursor="hand2", highlightthickness=0)
-        self.chk_done_only.pack(side="left", padx=(8, 0))
-
-        # 窗口保持最前：勾选后主窗口始终置顶（盖在其它窗口之上）
-        self.var_topmost = tk.BooleanVar(value=False)
-        self.chk_topmost = tk.Checkbutton(
-            header, text="保持最前", variable=self.var_topmost,
-            command=self._on_topmost_changed, font=theme.FONT_LABEL,
-            bg=theme.CARD_BG, fg=theme.TEXT_MUTED, activebackground=theme.CARD_BG,
-            activeforeground=theme.TEXT_DARK, relief="flat",
-            cursor="hand2", highlightthickness=0)
-        self.chk_topmost.pack(side="left", padx=(8, 0))
+        # 「保持最前」同样移到设置窗口，这里只保留供置顶逻辑使用的内部状态。
+        self.var_topmost = tk.BooleanVar(value=bool(self.config.always_on_top))
 
         self._make_button(header, "＋ 新建", self.new_memo, side="left", padx=(10, 4))
         self._make_button(header, "导入", self.open_import, side="left", padx=4)
         self._make_button(header, "设置", self.open_settings, side="left", padx=4)
         self._make_button(header, "—", self.hide_to_tray, side="right", padx=4, width=3)
-        self._make_button(header, "×", self.hide_to_tray, side="right", padx=4, width=3)
 
     def _make_button(self, parent: Any, text: str, command: Any,
                      side: str = "left", padx: Any = 4, width: int = 0) -> None:
@@ -780,25 +774,31 @@ class MainWindow(object):
         if self._on_hide_to_tray is not None:
             self._on_hide_to_tray()
 
-    def _set_window_width(self, width: int) -> int:
+    def _set_window_width(self, width: int,
+                          min_width: Optional[int] = None) -> int:
         """展开 / 收起详情面板时调整窗口宽度，并返回实际应用的宽度。
 
         详情面板宽度固定，列表区可伸缩；小屏幕上把窗口收窄一点不会裁掉
         右侧属性区，只是列表变窄，同时留出 20px 左右边距保持圆角观感。
         返回钳制后的真实宽度，调用方据此精确记忆各态布局尺寸。
+
+        min_width 为可选下限：默认用 MIN_COLLAPSED_W（展开态需容纳两栏）；
+        收起态恢复到用户拖窄后的宽度时，传入更低的 MIN_WINDOW_W，避免把
+        用户缩窄的窗口强行撑回 840（修「关详情后列表又被拉宽」）。
         """
+        floor = theme.MIN_COLLAPSED_W if min_width is None else min_width
         try:
             x = self.root.winfo_x()
             y = self.root.winfo_y()
             mx, my, sw, sh = current_monitor_workarea(self.root)
-            width = max(theme.MIN_COLLAPSED_W, min(int(width), sw - 40))
+            width = max(floor, min(int(width), sw - 40))
             if x + width > mx + sw - 10:
                 x = max(mx, mx + sw - width - 20)
             x = max(mx, x)
             y = max(my, y)
             self.root.geometry("%dx%d+%d+%d" % (width, theme.WIN_H, x, y))
         except tk.TclError:
-            width = max(theme.MIN_COLLAPSED_W, int(width))
+            width = max(floor, int(width))
             self.root.geometry("%dx%d" % (width, theme.WIN_H))
         return width
 
@@ -924,18 +924,28 @@ class MainWindow(object):
         self.refresh()
 
     def _on_sort_changed(self, event: Any = None) -> None:
-        """排序模式切换（同时持久化到配置文件）。"""
-        self._sort_mode = LABEL_TO_SORT.get(self.cmb_sort.get(), SORT_CREATED)
-        self.config.sort_mode = self._sort_mode
-        try:
-            self.config.save(self.config_path)
-        except OSError:
-            pass
-        self._scroll = 0
-        self.refresh()
+        """排序 / 视图下拉切换：普通项切排序，筛选项只收窄视图。
+
+        排序与筛选正交：选中「仅显示已完成」时沿用当前 _sort_mode 且不写盘；
+        选回任意普通排序项则取消筛选并持久化新的排序模式。
+        """
+        selected = self.cmb_sort.get()
+        if selected == FILTER_DONE_ONLY_LABEL:
+            # 筛选项：排序模式保持不变，仅打开内部筛选状态
+            self.var_done_only.set(True)
+        else:
+            mode = LABEL_TO_SORT.get(selected, SORT_CREATED)
+            self._sort_mode = mode
+            self.config.sort_mode = mode
+            try:
+                self.config.save(self.config_path)
+            except OSError:
+                pass
+            self.var_done_only.set(False)
+        self._on_done_only_changed()
 
     def _on_done_only_changed(self) -> None:
-        """「仅显示已完成」勾选切换：复位滚动并刷新列表。"""
+        """「仅显示已完成」状态变化后复位滚动并刷新列表。"""
         self._scroll = 0
         self.refresh()
 
@@ -992,9 +1002,11 @@ class MainWindow(object):
         self.detail.hide()
         self.splitter.grid_remove()
         self.body.columnconfigure(1, minsize=0)
-        # 恢复到收起态记忆的窗口宽（不低于顶栏所需的最小宽度），
+        # 恢复到收起态记忆的窗口宽：下限用拖边界时的 MIN_WINDOW_W，
+        # 尊重用户预先缩窄的宽度，不再强行撑回 MIN_COLLAPSED_W=840。
         # 列表撑满整个可用区，右侧不留空白。
-        applied = self._set_window_width(self._collapsed_win_w)
+        applied = self._set_window_width(self._collapsed_win_w,
+                                         min_width=theme.MIN_WINDOW_W)
         full = max(theme.MIN_LIST_W, applied - 2 * theme.PAD)
         self._apply_list_width(full)
         self.draw_rows()
@@ -1289,6 +1301,15 @@ class MainWindow(object):
             anchor="w", relief="flat", cursor="hand2",
         ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 2))
 
+        always_on_top_var = tk.BooleanVar(value=bool(self.config.always_on_top))
+        tk.Checkbutton(
+            options, text="窗口保持最前（盖在其它窗口之上）",
+            variable=always_on_top_var, font=theme.FONT_LABEL,
+            bg=theme.CARD_BG, fg=theme.TEXT_DARK,
+            activebackground=theme.CARD_BG, selectcolor=theme.INPUT_BG,
+            anchor="w", relief="flat", cursor="hand2",
+        ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(2, 8))
+
         # ---------------- 快捷键 ----------------
         hotkey_frame = tk.LabelFrame(window, text="快捷键",
                                      font=theme.FONT_LABEL, bg=theme.CARD_BG,
@@ -1395,14 +1416,14 @@ class MainWindow(object):
                   command=lambda: self._save_settings(
                       window, color_vars, hours_var, sort_var,
                       hotkey_var, new_hotkey_var, unlock_hours_var,
-                      auto_start_var)).pack(side="left")
+                      auto_start_var, always_on_top_var)).pack(side="left")
         tk.Button(buttons, text="恢复默认", font=theme.FONT_LABEL,
                   bg=theme.HEADER_BG, fg=theme.TEXT_DARK, relief="flat",
                   cursor="hand2", width=9,
                   command=lambda: self._reset_settings(
                       color_vars, previews, hours_var, sort_var,
                       hotkey_var, new_hotkey_var, unlock_hours_var,
-                      auto_start_var)).pack(side="left", padx=8)
+                      auto_start_var, always_on_top_var)).pack(side="left", padx=8)
         tk.Button(buttons, text="退出程序", font=theme.FONT_LABEL,
                   bg=theme.HEADER_BG, fg=theme.DANGER, relief="flat",
                   cursor="hand2", width=9,
@@ -1428,8 +1449,9 @@ class MainWindow(object):
                        hotkey_var: Any = None,
                        new_hotkey_var: Any = None,
                        unlock_hours_var: Any = None,
-                       auto_start_var: Any = None) -> None:
-        """校验并保存设置，立即刷新列表颜色、全局热键与开机自启。"""
+                       auto_start_var: Any = None,
+                       always_on_top_var: Any = None) -> None:
+        """校验并保存设置，立即刷新置顶、列表颜色、全局热键与开机自启。"""
         for key in COLOR_KEYS:
             raw = color_vars[key].get().strip()
             hex_value = raw.split()[0] if raw else ""
@@ -1452,7 +1474,11 @@ class MainWindow(object):
         self.config.sort_mode = LABEL_TO_SORT.get(sort_var.get(), SORT_CREATED)
         if auto_start_var is not None:
             self.config.auto_start = bool(auto_start_var.get())
+        if always_on_top_var is not None:
+            self.config.always_on_top = bool(always_on_top_var.get())
         self._sort_mode = self.config.sort_mode
+        # 保存后下拉显示的是普通排序项，内部筛选状态需同步复位
+        self.var_done_only.set(False)
         try:
             self.cmb_sort.set(SORT_MODE_LABELS[self._sort_mode])
         except (tk.TclError, KeyError):
@@ -1488,6 +1514,10 @@ class MainWindow(object):
             messagebox.showerror("保存失败", "无法写入配置文件：%s" % exc,
                                  parent=window)
             return
+        # 应用「窗口保持最前」：保存后立即生效，无需重启
+        if always_on_top_var is not None:
+            self.var_topmost.set(self.config.always_on_top)
+            self._on_topmost_changed()
         # 应用开机自启（写当前用户的 HKCU Run 项，失败时配置仍保留）
         if auto_start_var is not None and getattr(self, "_autostart_applier", None):
             try:
@@ -1519,7 +1549,8 @@ class MainWindow(object):
                         sort_var: Any, hotkey_var: Any = None,
                         new_hotkey_var: Any = None,
                         unlock_hours_var: Any = None,
-                        auto_start_var: Any = None) -> None:
+                        auto_start_var: Any = None,
+                        always_on_top_var: Any = None) -> None:
         """把设置窗口表单恢复为默认值（不立即写盘，需点击保存）。"""
         for key in COLOR_KEYS:
             color_vars[key].set(DEFAULT_COLOR_MAP[key])
@@ -1537,6 +1568,8 @@ class MainWindow(object):
             new_hotkey_var.set(DEFAULT_NEW_HOTKEY)
         if auto_start_var is not None:
             auto_start_var.set(DEFAULT_AUTO_START)
+        if always_on_top_var is not None:
+            always_on_top_var.set(DEFAULT_ALWAYS_ON_TOP)
 
     def _exit_from_settings(self) -> None:
         """设置窗口中的退出入口（走完整清理流程）。"""

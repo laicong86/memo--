@@ -30,7 +30,8 @@ atexit.register(_DATA_TMP.cleanup)
 import tkinter as tk
 
 import main as main_module
-from config import AppConfig, COLOR_KEYS, DEFAULT_COLOR_MAP
+from config import (AppConfig, COLOR_KEYS, DEFAULT_ALWAYS_ON_TOP,
+                    DEFAULT_COLOR_MAP)
 from models import (STATUS_DONE, STATUS_LEVELS, TIME_FORMAT, URGENCY_LEVELS,
                     Memo)
 from storage import MemoStore
@@ -90,10 +91,16 @@ class GuiTestCase(unittest.TestCase):
 class TestMainWindowSmoke(GuiTestCase):
     def test_build_exposes_all_required_widgets(self):
         for name in ("var_search", "cmb_sort", "list_canvas", "detail",
-                     "var_status", "container"):
+                     "var_status", "var_done_only", "var_topmost", "container"):
             with self.subTest(widget=name):
                 self.assertTrue(hasattr(self.window, name), name)
-        self.assertEqual(len(self.window.cmb_sort["values"]), 3)
+        # 下拉 = 3 个普通排序项 + 1 个「仅显示已完成」筛选项
+        self.assertEqual(len(self.window.cmb_sort["values"]),
+                         len(ui_main.SORT_VIEW_OPTIONS))
+        self.assertIn(ui_main.FILTER_DONE_ONLY_LABEL,
+                      self.window.cmb_sort["values"])
+        self.assertFalse(hasattr(self.window, "chk_done_only"))
+        self.assertFalse(hasattr(self.window, "chk_topmost"))
 
     def test_status_bar_shows_counts_and_system_time(self):
         text = self.window.var_status.get()
@@ -295,6 +302,57 @@ class TestMainWindowSmoke(GuiTestCase):
         self.assertEqual(window.root.winfo_width(), 1240)
         self.assertEqual(window._list_w, 1240 - 2 * theme.PAD)
 
+    def test_close_detail_keeps_collapsed_width_below_min_collapsed(self):
+        """收起态拖窄到 MIN_COLLAPSED_W 以下后，开/关详情不得把窗口拉宽。
+
+        回归：界面精简后顶栏变窄，用户可把收起态窗口拖到 840 以下；旧实现
+        在 close_detail 用 MIN_COLLAPSED_W=840 钳制，关详情瞬间把窗口和列表
+        强行撑回 840，丢失用户缩窄后的宽度。收起态恢复应使用拖边界同款下限
+        MIN_WINDOW_W，尊重用户记下的窄宽度。
+        """
+        window = self.window
+        window.root.deiconify()
+        narrow = 700  # 低于 theme.MIN_COLLAPSED_W(840)，高于 MIN_WINDOW_W
+        wide = narrow + 220  # 920
+        window.root.geometry("%dx%d+50+50" % (wide, theme.WIN_H))
+        window.root.update()
+        memo = self.store.create_memo(title="窄窗测试")
+        self.store.add(memo)
+
+        # 模拟用户在收起态把右边界从 wide 拖窄到 narrow（dx = -220）
+        window._resizing = True
+        window._resize_edge = "e"
+        window._resize_start = (500, 500, wide, theme.WIN_H)
+        window._resize_anchor = (50, 50)
+        with mock.patch.object(ui_main, "current_monitor_workarea",
+                               return_value=(0, 0, 1920, 1032)):
+            with mock.patch.object(window.root, "geometry") as fake_geom:
+                window._on_canvas_resize_motion(
+                    SimpleNamespace(x_root=280, y_root=500))
+                # geometry 被 mock，手动同步宽度供后续 winfo_width 读取
+                applied = fake_geom.call_args[0][0]
+                window.root.geometry(applied)
+        window._on_canvas_release(SimpleNamespace(x_root=280, y_root=500))
+        window.root.update()
+        self.assertEqual(window._collapsed_win_w, narrow)
+
+        # 开关详情：窗口被拉宽展开，再收起必须回到用户缩窄的 narrow
+        window.show_detail(memo)
+        window.root.update()
+        window.close_detail()
+        window.root.update()
+        self.assertEqual(window._collapsed_win_w, narrow)
+        self.assertEqual(window.root.winfo_width(), narrow)
+        self.assertEqual(window._list_w, narrow - 2 * theme.PAD)
+
+        # 反复开关仍稳定在窄宽，不逐次被撑大
+        for _ in range(3):
+            window.show_detail(memo)
+            window.root.update()
+            window.close_detail()
+            window.root.update()
+        self.assertEqual(window.root.winfo_width(), narrow)
+
     def test_splitter_drag_changes_ratio_and_clamps(self):
         """按住分隔条左右拖动可调整两侧占比，且不会越过最小宽度。"""
         window = self.window
@@ -406,10 +464,28 @@ class TestMainWindowSmoke(GuiTestCase):
         self.assertIn("导入", texts)
         self.assertNotIn("配色设置", texts)
 
-    # --- 仅显示已完成勾选框 ---
-    def test_done_only_checkbox_exists(self):
-        self.assertEqual(str(self.window.chk_done_only.cget("text")), "已完成")
+    def test_header_keeps_minimize_button_and_drops_close_button(self):
+        header = [c for c in self.window.container.winfo_children()
+                  if isinstance(c, tk.Frame)][0]
+        texts = [str(child.cget("text")) for child in header.winfo_children()
+                 if isinstance(child, tk.Button)]
+        self.assertIn("—", texts)
+        self.assertNotIn("×", texts)
+
+    # --- 仅显示已完成（排序下拉里的筛选项） ---
+    def test_done_only_is_combobox_option_not_checkbox(self):
+        self.assertFalse(hasattr(self.window, "chk_done_only"))
+        self.assertIn(ui_main.FILTER_DONE_ONLY_LABEL,
+                      self.window.cmb_sort["values"])
         self.assertFalse(self.window.var_done_only.get())
+        # 默认选中普通排序项：默认排序、默认不过滤
+        self.assertEqual(self.window.cmb_sort.get(),
+                         self.window.cmb_sort["values"][0])
+
+    def _select_view(self, label):
+        """模拟用户在排序下拉里选中某一项。"""
+        self.window.cmb_sort.set(label)
+        self.window._on_sort_changed()
 
     def test_done_only_filters_list(self):
         window = self.window
@@ -419,27 +495,74 @@ class TestMainWindowSmoke(GuiTestCase):
             store.add(memo)
         window.refresh()
         self.assertEqual(len(window._rows), 4)
-        window.var_done_only.set(True)
-        window.refresh()
+        self._select_view(ui_main.FILTER_DONE_ONLY_LABEL)
+        self.assertTrue(window.var_done_only.get())
         self.assertEqual(len(window._rows), 2)
         self.assertTrue(all(m.is_done() for m in window._rows))
-        window.var_done_only.set(False)
-        window.refresh()
+        # 选回普通排序项即取消筛选
+        self._select_view("按创建时间")
+        self.assertFalse(window.var_done_only.get())
         self.assertEqual(len(window._rows), 4)
 
     def test_done_only_updates_status_bar(self):
         window = self.window
-        window.var_done_only.set(True)
-        window.refresh()
-        self.assertIn("已完成", window.var_status.get())
-        window.var_done_only.set(False)
-        window.refresh()
+        self._select_view(ui_main.FILTER_DONE_ONLY_LABEL)
+        self.assertIn("· 已完成", window.var_status.get())
+        self._select_view("按创建时间")
         self.assertNotIn("· 已完成", window.var_status.get())
 
-    # --- 窗口保持最前勾选框 ---
-    def test_topmost_checkbox_exists(self):
-        self.assertEqual(str(self.window.chk_topmost.cget("text")), "保持最前")
+    def test_done_only_keeps_sort_mode_and_does_not_persist(self):
+        """筛选项与排序正交：排序模式不变，也不把筛选项写进 config。"""
+        window = self.window
+        self._select_view("按紧急程度")
+        self.assertEqual(window._sort_mode, "urgency")
+        self.assertEqual(window.config.sort_mode, "urgency")
+        self._select_view(ui_main.FILTER_DONE_ONLY_LABEL)
+        self.assertEqual(window._sort_mode, "urgency")
+        self.assertEqual(window.config.sort_mode, "urgency")
+        self.assertTrue(window.var_done_only.get())
+        # 回到普通项后仍正常持久化新的排序模式
+        self._select_view("按预期完成时间")
+        self.assertEqual(window._sort_mode, "due_at")
+        self.assertEqual(window.config.sort_mode, "due_at")
+        self.assertEqual(AppConfig.load(window.config_path).sort_mode, "due_at")
+
+    # --- 窗口保持最前（移到设置窗口并持久化） ---
+    def test_topmost_checkbox_removed_from_header(self):
+        self.assertFalse(hasattr(self.window, "chk_topmost"))
         self.assertFalse(self.window.var_topmost.get())
+
+    def test_settings_has_always_on_top_option(self):
+        self.window.open_settings()
+        self.root.update()
+        tops = [child for child in self.root.winfo_children()
+                if isinstance(child, tk.Toplevel)]
+        self.assertEqual(len(tops), 1)
+        texts = []
+
+        def walk(node):
+            for child in node.winfo_children():
+                if isinstance(child, tk.Checkbutton):
+                    texts.append(str(child.cget("text")))
+                walk(child)
+        walk(tops[0])
+        self.assertTrue(any("窗口保持最前" in text for text in texts))
+        tops[0].destroy()
+
+    def test_startup_applies_saved_always_on_top(self):
+        config = AppConfig(always_on_top=True)
+        root = _make_root()
+        try:
+            with mock.patch.object(MainWindow, "_tick"):
+                window = MainWindow(root, self.store, config,
+                                    self.config_path)
+            self.assertTrue(window.var_topmost.get())
+            self.assertEqual(root.attributes("-topmost"), 1)
+        finally:
+            try:
+                root.destroy()
+            except tk.TclError:
+                pass
 
     def test_topmost_toggle_applies_immediately(self):
         window = self.window
@@ -463,6 +586,31 @@ class TestMainWindowSmoke(GuiTestCase):
         window.var_topmost.set(False)
         window._clear_topmost()
         self.assertEqual(window.root.attributes("-topmost"), 0)
+
+    def test_save_settings_persists_and_applies_always_on_top(self):
+        window = self.window
+        top = tk.Toplevel(self.root)
+        colors = {key: tk.StringVar(value=DEFAULT_COLOR_MAP[key])
+                  for key in COLOR_KEYS}
+        window._save_settings(
+            top, colors, tk.IntVar(value=48), tk.StringVar(value=""),
+            tk.StringVar(value="F2"), tk.StringVar(value="Ctrl+Alt+N"),
+            tk.IntVar(value=24), tk.BooleanVar(value=False),
+            tk.BooleanVar(value=True))
+        self.assertIs(window.config.always_on_top, True)
+        self.assertTrue(window.var_topmost.get())
+        self.assertEqual(window.root.attributes("-topmost"), 1)
+        self.assertIs(AppConfig.load(window.config_path).always_on_top, True)
+
+    def test_reset_settings_restores_default_always_on_top(self):
+        var = tk.BooleanVar(value=True)
+        self.window._reset_settings(
+            {key: tk.StringVar(value=DEFAULT_COLOR_MAP[key])
+             for key in COLOR_KEYS},
+            {key: tk.Label(self.root) for key in COLOR_KEYS},
+            tk.IntVar(value=48), tk.StringVar(value=""),
+            always_on_top_var=var)
+        self.assertEqual(var.get(), DEFAULT_ALWAYS_ON_TOP)
 
     # --- 导入窗口 ---
     def test_open_import_creates_window_and_imports(self):
@@ -1088,8 +1236,11 @@ class TestAutoSaveAndNewHotkey(GuiTestCase):
         return texts
 
     def test_header_labels_are_compact(self):
-        self.assertEqual(str(self.window.chk_done_only.cget("text")), "已完成")
-        self.assertEqual(str(self.window.chk_topmost.cget("text")), "保持最前")
+        # 两个独立勾选框与右上角「×」已移除；筛选项并入排序下拉
+        self.assertFalse(hasattr(self.window, "chk_done_only"))
+        self.assertFalse(hasattr(self.window, "chk_topmost"))
+        self.assertIn(ui_main.FILTER_DONE_ONLY_LABEL,
+                      self.window.cmb_sort["values"])
         # 「排序」文字标签已移除，仅保留下拉选项框
         labels = []
 

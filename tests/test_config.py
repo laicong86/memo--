@@ -24,6 +24,7 @@ from config import (
     COLOR_KEY_LABELS,
     COLOR_PRESETS,
     CONFIG_VERSION,
+    DEFAULT_ALWAYS_ON_TOP,
     DEFAULT_COLOR_MAP,
     DEFAULT_DUE_SOON_HOURS,
     DEFAULT_HOTKEY,
@@ -243,7 +244,7 @@ class TestAppConfig(unittest.TestCase):
         self.assertEqual(set(data.keys()),
                          {"version", "color_map", "due_soon_hours",
                           "unlock_due_hours", "sort_mode", "hotkey",
-                          "new_hotkey", "auto_start"})
+                          "new_hotkey", "auto_start", "always_on_top"})
         self.assertEqual(data["version"], CONFIG_VERSION)
         self.assertEqual(data["color_map"], DEFAULT_COLOR_MAP)
         self.assertEqual(data["hotkey"], DEFAULT_HOTKEY)
@@ -338,6 +339,41 @@ class TestAppConfig(unittest.TestCase):
         cfg = AppConfig(color_map={"done": "#010101", "normal": "bad", "fake": "#020202"})
         self.assertEqual(cfg.get_color("done"), "#010101")
         self.assertEqual(cfg.get_color("normal"), DEFAULT_COLOR_MAP["normal"])
+
+
+class TestAlwaysOnTopConfig(unittest.TestCase):
+    """窗口保持最前：默认值、脏数据兼容与序列化往返（对齐 auto_start 风格）。"""
+
+    def test_default_value_is_false(self):
+        self.assertIs(DEFAULT_ALWAYS_ON_TOP, False)
+        self.assertIs(AppConfig().always_on_top, False)
+
+    def test_constructor_accepts_bool(self):
+        self.assertIs(AppConfig(always_on_top=True).always_on_top, True)
+
+    def test_old_config_without_field_keeps_default(self):
+        cfg = AppConfig()
+        cfg.apply_dict({"hotkey": "F9"})
+        self.assertIs(cfg.always_on_top, DEFAULT_ALWAYS_ON_TOP)
+
+    def test_apply_dict_coerces_dirty_values(self):
+        cfg = AppConfig()
+        for raw, expected in (("false", False), ("off", False), (0, False),
+                              ("true", True), ("yes", True), (1, True)):
+            with self.subTest(raw=raw):
+                cfg.apply_dict({"always_on_top": raw})
+                self.assertIs(cfg.always_on_top, expected)
+        # 无法识别的值回退默认值，而不是被 bool() 误判为 True
+        cfg.apply_dict({"always_on_top": []})
+        self.assertIs(cfg.always_on_top, DEFAULT_ALWAYS_ON_TOP)
+
+    def test_save_load_roundtrip(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "config.json")
+            AppConfig(always_on_top=True).save(path)
+            loaded = AppConfig.load(path)
+            self.assertIs(loaded.always_on_top, True)
+            self.assertEqual(loaded.as_dict(), AppConfig(always_on_top=True).as_dict())
 
 
 class TestHexValidation(unittest.TestCase):

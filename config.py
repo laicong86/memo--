@@ -81,6 +81,7 @@ DEFAULT_SORT_MODE = SORT_CREATED
 DEFAULT_HOTKEY = "F2"  # 全局快捷键：弹出 / 最小化主窗口
 DEFAULT_NEW_HOTKEY = "Ctrl+Alt+N"  # 全局快捷键：快速新建事务
 DEFAULT_AUTO_START = False  # 开机自启动：默认关闭，由用户在设置里主动开启
+DEFAULT_ALWAYS_ON_TOP = False  # 窗口保持最前：默认关闭，设置界面勾选后持久化
 CONFIG_VERSION = 1
 
 _MAX_HOURS = 24 * 365
@@ -150,7 +151,7 @@ def _coerce_bool(value: Any, default: bool = DEFAULT_AUTO_START) -> bool:
 # 配置对象
 # ---------------------------------------------------------------------------
 class AppConfig(object):
-    """用户配置：颜色映射、临期阈值、排序、快捷键、开机自启。"""
+    """用户配置：颜色映射、临期阈值、排序、快捷键、开机自启、窗口保持最前。"""
 
     def __init__(
         self,
@@ -162,6 +163,7 @@ class AppConfig(object):
         new_hotkey: str = DEFAULT_NEW_HOTKEY,
         auto_start: bool = DEFAULT_AUTO_START,
         path: str = "",
+        always_on_top: bool = DEFAULT_ALWAYS_ON_TOP,
     ):
         self.path = path or ""
         self.color_map = dict(DEFAULT_COLOR_MAP)
@@ -169,6 +171,7 @@ class AppConfig(object):
         self.unlock_due_hours = _safe_hours(unlock_due_hours,
                                             DEFAULT_UNLOCK_DUE_HOURS)
         self.auto_start = _coerce_bool(auto_start)
+        self.always_on_top = _coerce_bool(always_on_top, DEFAULT_ALWAYS_ON_TOP)
         # 非字符串（含不可哈希类型）一律回退，避免 dict 成员判断抛 TypeError
         self.sort_mode = (
             sort_mode
@@ -242,6 +245,9 @@ class AppConfig(object):
             self.new_hotkey = DEFAULT_NEW_HOTKEY
         if "auto_start" in data:
             self.auto_start = _coerce_bool(data.get("auto_start"))
+        if "always_on_top" in data:
+            self.always_on_top = _coerce_bool(data.get("always_on_top"),
+                                              DEFAULT_ALWAYS_ON_TOP)
 
     def as_dict(self) -> Dict[str, Any]:
         """序列化为可写 JSON 的字典。"""
@@ -254,6 +260,7 @@ class AppConfig(object):
             "hotkey": self.hotkey,
             "new_hotkey": self.new_hotkey,
             "auto_start": self.auto_start,
+            "always_on_top": self.always_on_top,
         }
 
     def save(self, path: str = "") -> bool:
