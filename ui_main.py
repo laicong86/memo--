@@ -166,7 +166,12 @@ class MainWindow(object):
         # 用户通过分隔条手动确定的列表宽度；None 表示从未调整，展开详情走默认各半。
         # 与 _list_w 分离：收起详情后窗口收窄，但用户占比要留住以便重开恢复。
         self._user_list_w = None  # type: Optional[int]
-        # 展开态的窗口宽度，收起时记住、重开时恢复，避免反复开关越收越窄。
+        # 「收起态」与「展开态」各自的布局尺寸分开记忆，切换时原样恢复，
+        # 互不污染：
+        #   _collapsed_win_w  收起态（纯任务列表）的窗口宽，列表撑满整个可用区
+        #   _expanded_win_w   展开态（列表+详情）的窗口宽
+        #   _user_list_w      展开态里用户调整过的列表宽（占比记忆）
+        self._collapsed_win_w = theme.WIN_LIST_W
         self._expanded_win_w = theme.WIN_LIST_W
 
         self._setup_style()
@@ -694,12 +699,11 @@ class MainWindow(object):
                 # 用户拖窗口边界改变两栏占比，也视为用户调整，记下来供重开恢复
                 self._user_list_w = new_list
             else:
+                # 收起态：列表撑满窗口（无留白）；只更新「收起态」记忆，
+                # 不碰展开态的 _user_list_w / _expanded_win_w，两态互不污染。
                 new_list = max(theme.MIN_LIST_W, width - 2 * theme.PAD)
                 self._apply_list_width(new_list)
-                # 收起态拖边界改变了列表/窗口宽度，也视为用户调整：记下展开态
-                # 应恢复的宽度与列表占比，供下次展开详情时沿用。
-                self._expanded_win_w = width
-                self._user_list_w = new_list
+                self._collapsed_win_w = width
         try:
             self.root.geometry("%dx%d+%d+%d" % (width, height, x, y))
         except tk.TclError:
@@ -776,11 +780,12 @@ class MainWindow(object):
         if self._on_hide_to_tray is not None:
             self._on_hide_to_tray()
 
-    def _set_window_width(self, width: int) -> None:
-        """展开 / 收起详情面板时调整窗口宽度，并保证不贴屏幕边缘。
+    def _set_window_width(self, width: int) -> int:
+        """展开 / 收起详情面板时调整窗口宽度，并返回实际应用的宽度。
 
         详情面板宽度固定，列表区可伸缩；小屏幕上把窗口收窄一点不会裁掉
         右侧属性区，只是列表变窄，同时留出 20px 左右边距保持圆角观感。
+        返回钳制后的真实宽度，调用方据此精确记忆各态布局尺寸。
         """
         try:
             x = self.root.winfo_x()
@@ -793,7 +798,9 @@ class MainWindow(object):
             y = max(my, y)
             self.root.geometry("%dx%d+%d+%d" % (width, theme.WIN_H, x, y))
         except tk.TclError:
+            width = max(theme.MIN_COLLAPSED_W, int(width))
             self.root.geometry("%dx%d" % (width, theme.WIN_H))
+        return width
 
     # ------------------------------------------------------------------
     # 列表绘制
@@ -941,42 +948,55 @@ class MainWindow(object):
         默认布局列表与详情等宽；若用户此前拖动过分隔条或窗口边界，则恢复
         用户记下的列表宽度（_user_list_w），详情吸收剩余宽度（不小于最小宽）。
         """
+        # 收起态窗口宽由 _on_canvas_resize_motion 在拖边界时记入
+        # _collapsed_win_w；这里不读实时 winfo_width，避免几何未同步时
+        # 把刚记下的值覆盖掉。关闭详情时按该记忆原样恢复。
         self._selected_id = memo.id
         self._detail_open = True
         self.detail.show(memo)
         self.body.columnconfigure(1, minsize=theme.SPLIT_W)
         self.splitter.grid()
-        # 先定列表宽：默认取展开态窗口可用宽的一半，用户调过则恢复其记录值。
+        # 恢复「展开态」记忆：默认各半；用户调过则按其记下的列表宽。
         if self._user_list_w is not None:
             list_w = max(theme.MIN_LIST_W, int(self._user_list_w))
         else:
             expanded_body = self._expanded_win_w - 2 * theme.PAD - theme.SPLIT_W
             list_w = max(theme.MIN_LIST_W, expanded_body // 2)
-        # 详情至少 MIN_DETAIL_W，窗口加宽到容得下两栏
+        # 详情至少 MIN_DETAIL_W，窗口宽回到上次展开时的记忆值（容得下两栏）。
         detail_w = max(theme.MIN_DETAIL_W, list_w)
-        target_win = 2 * theme.PAD + list_w + theme.SPLIT_W + detail_w
-        self._set_window_width(target_win)
-        self._expanded_win_w = target_win
-        # 以目标窗口宽为准重新钳制列表（此时 geometry 尚未生效，不能读
-        # body.winfo_width()——那还是收起态的窄宽度，会把列表误压到最小）
-        available = max(0, target_win - 2 * theme.PAD - theme.SPLIT_W)
-        target = list_w
+        target_win = max(self._expanded_win_w,
+                         2 * theme.PAD + list_w + theme.SPLIT_W + detail_w)
+        applied = self._set_window_width(target_win)
+        self._expanded_win_w = applied
+        # 以实际应用宽度为准钳制列表（此时 geometry 未必生效，不能读
+        # body.winfo_width()——那还是收起态的窄宽度）。
+        available = max(0, applied - 2 * theme.PAD - theme.SPLIT_W)
         max_list = max(theme.MIN_LIST_W, available - theme.MIN_DETAIL_W)
-        target = max(theme.MIN_LIST_W, min(int(target), max_list))
+        target = max(theme.MIN_LIST_W, min(int(list_w), max_list))
         self._apply_list_width(target)
         self.draw_rows()
 
     def close_detail(self) -> None:
-        """收起详情面板：窗口跟着收窄到列表宽度，列表保持原宽不被撑满。"""
+        """收起详情面板：恢复到「收起态」记忆的窗口宽，列表撑满不留白。
+
+        收起前先记下当前「展开态」窗口宽与列表宽，供下次展开时原样恢复；
+        两个状态的尺寸各自独立记忆，互不污染。
+        """
+        if self._detail_open:
+            cur_w = self.root.winfo_width()
+            if cur_w >= theme.MIN_COLLAPSED_W:
+                self._expanded_win_w = cur_w
+            # 展开态列表宽（含用户调整过的占比）记下来，供下次展开原样恢复
+            self._user_list_w = self._list_w
         self._detail_open = False
         self.detail.hide()
         self.splitter.grid_remove()
         self.body.columnconfigure(1, minsize=0)
-        # 窗口收窄到「列表宽 + 两侧边距」，但不低于顶栏所需的最小宽度，
-        # 否则「设置 / — / ×」会被挤出窗口右缘裁掉。
-        target_win = max(theme.MIN_COLLAPSED_W, self._list_w + 2 * theme.PAD)
-        self._set_window_width(target_win)
-        # 列表保持收起前的宽度不变（不占满详情留下的空间）
+        # 恢复到收起态记忆的窗口宽（不低于顶栏所需的最小宽度），
+        # 列表撑满整个可用区，右侧不留空白。
+        applied = self._set_window_width(self._collapsed_win_w)
+        full = max(theme.MIN_LIST_W, applied - 2 * theme.PAD)
+        self._apply_list_width(full)
         self.draw_rows()
 
     def new_memo(self) -> None:
