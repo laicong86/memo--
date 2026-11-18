@@ -201,21 +201,53 @@ class TestMainWindowSmoke(GuiTestCase):
         detail_w = window.body.grid_bbox(2, 0)[2]
         self.assertLess(abs(detail_w - window._list_w), 40)
 
-    def test_detail_open_keeps_window_width_unchanged(self):
-        """紧凑布局：展开/收起详情都不改变窗口宽度。"""
+    def test_detail_close_narrows_window_but_keeps_list_width(self):
+        """收起详情：窗口跟着收窄到列表宽，列表本身不再被撑满。"""
         window = self.window
         window.root.deiconify()
         window.root.geometry("%dx%d+50+50" % (theme.WIN_LIST_W, theme.WIN_H))
         window.root.update()
-        before = window.root.winfo_width()
-        memo = self.store.create_memo(title="窗口宽度不变")
+        memo = self.store.create_memo(title="窗口跟着收窄")
         self.store.add(memo)
         window.show_detail(memo)
         window.root.update()
-        self.assertEqual(window.root.winfo_width(), before)
+        list_w = window._list_w
+        detail_win_w = window.root.winfo_width()
+        self.assertGreater(detail_win_w, theme.MIN_COLLAPSED_W)
+
         window.close_detail()
         window.root.update()
-        self.assertEqual(window.root.winfo_width(), before)
+        # 窗口收窄到「列表宽 + 边距」（受顶栏下限保护），列表宽度不变
+        expected = max(theme.MIN_COLLAPSED_W, list_w + 2 * theme.PAD)
+        self.assertEqual(window.root.winfo_width(), expected)
+        self.assertEqual(window._list_w, list_w)
+        self.assertLess(window.root.winfo_width(), detail_win_w)
+
+        # 再次展开：恢复到展开态宽度，列表占比不变
+        window.show_detail(memo)
+        window.root.update()
+        self.assertEqual(window._list_w, list_w)
+        self.assertEqual(window.root.winfo_width(), detail_win_w)
+
+    def test_repeated_detail_toggle_keeps_expanded_width(self):
+        """反复展开/收起详情，展开态窗口宽度稳定，不会每次越收越窄。"""
+        window = self.window
+        memo = self.store.create_memo(title="反复开关")
+        self.store.add(memo)
+        window.root.deiconify()
+        window.root.geometry("%dx%d+50+50" % (theme.WIN_LIST_W, theme.WIN_H))
+        window.root.update()
+
+        window.show_detail(memo)
+        window.root.update()
+        widths = [window.root.winfo_width()]
+        for _ in range(3):
+            window.close_detail()
+            window.root.update()
+            window.show_detail(memo)
+            window.root.update()
+            widths.append(window.root.winfo_width())
+        self.assertEqual(len(set(widths)), 1, "展开态窗口宽度应保持稳定：%s" % widths)
 
     def test_splitter_drag_changes_ratio_and_clamps(self):
         """按住分隔条左右拖动可调整两侧占比，且不会越过最小宽度。"""
@@ -242,12 +274,15 @@ class TestMainWindowSmoke(GuiTestCase):
         max_list = max(theme.MIN_LIST_W, body_w - theme.SPLIT_W - theme.MIN_DETAIL_W)
         self.assertLessEqual(window._list_w, max_list)
 
-        # 收起后列表撑满窗口；但用户占比要记下来供重开恢复
+        # 收起后窗口跟着收窄，列表保持用户调后的宽度、不被撑满；占比要记下来供重开恢复
         adjusted = window._user_list_w
         self.assertIsNotNone(adjusted)
         window.close_detail()
+        window.root.update()
         self.assertFalse(window.splitter.winfo_ismapped())
-        self.assertEqual(window._list_w, max(theme.MIN_LIST_W, window.body.winfo_width()))
+        self.assertEqual(window._list_w, adjusted)
+        self.assertEqual(window.root.winfo_width(),
+                         max(theme.MIN_COLLAPSED_W, adjusted + 2 * theme.PAD))
         window.show_detail(memo)
         self.assertEqual(window._list_w, adjusted)  # 重开恢复用户占比
 
@@ -268,9 +303,9 @@ class TestMainWindowSmoke(GuiTestCase):
         self.assertGreater(adjusted, start)
         self.assertEqual(window._user_list_w, adjusted)
 
-        # 收起：列表撑满窗口（显示层），但用户占比记录仍在
+        # 收起：窗口收窄，列表保持用户调后的宽度不被拉长，占比记录仍在
         window.close_detail()
-        self.assertGreater(window._list_w, adjusted)
+        self.assertEqual(window._list_w, adjusted)
         self.assertEqual(window._user_list_w, adjusted)
         # 重开：恢复用户调整后的列表宽，而不是默认各半
         window.show_detail(memo)

@@ -46,6 +46,9 @@ SPLIT_W = 6
 LIST_W = WIN_LIST_W - 2 * PAD  # 1084
 MIN_LIST_W = 420
 MIN_DETAIL_W = 360
+# 收起详情后窗口跟着收窄到的最小宽度。顶栏自然宽约 791px，加两侧 PAD
+# 需约 827px；低于此值 tkinter pack 会把最右的「×」挤出窗口被裁掉。
+MIN_COLLAPSED_W = 840
 # 详情面板给足宽度，属性条（紧急程度/状态/进度）与历史进展才不挤。
 DETAIL_PANEL_W = 600
 DETAIL_W = SPLIT_W + DETAIL_PANEL_W  # 展开时窗口增加的总宽度
